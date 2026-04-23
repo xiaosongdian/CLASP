@@ -525,7 +525,17 @@ def build_behavior_discrepancies(
         text_diff = actual_type in ("post", "reply")
 
         if type_diff or text_diff:
-            scenario_ctx = ""
+            # 标注误差类型：内容生成 / 交互决策
+            if actual_type in ("post", "reply"):
+                scenario_ctx = (
+                    "[TEXT_GENERATION] 内容生成误差\n"
+                    f"Decision type predicted: {pred_type}; actual type: {actual_type}"
+                )
+            else:
+                scenario_ctx = (
+                    "[DECISION_ONLY] 交互决策误差\n"
+                    f"Decision type predicted: {pred_type}; actual type: {actual_type}"
+                )
             predicted = f"{pred_type}" + (f': "{pred_text[:200]}"' if pred_text else "")
             # reply：action_text 为用户回复；target 为被回复对象，须单独展示
             if actual_type == "reply":
