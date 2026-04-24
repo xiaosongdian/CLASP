@@ -13,7 +13,7 @@ from sklearn.metrics import f1_score
 from transformers import AutoModel, AutoTokenizer
 import torch
 
-from src.config import ACTION_WEIGHTS, ALPHA, SENTENCE_TRANSFORMER_MODEL
+from src.config import ACTION_WEIGHTS, ALPHA, NORMALIZE_L_TO_UNIT, SENTENCE_TRANSFORMER_MODEL
 
 
 class SemanticScorer:
@@ -128,7 +128,13 @@ def compute_alignment_score(
     l_score: float,
     alpha: float = ALPHA,
 ) -> float:
-    """综合对齐得分: Q(S) = α·F(S) + (1-α)·L(S)"""
+    """
+    综合对齐得分:
+    - 默认: Q(S) = α·F(S) + (1-α)·L(S)
+    - 当 NORMALIZE_L_TO_UNIT=True: 先做 L_norm=(L+1)/2，再计算 Q
+    """
+    if NORMALIZE_L_TO_UNIT:
+        l_score = (l_score + 1.0) / 2.0
     return alpha * f_score + (1.0 - alpha) * l_score
 
 

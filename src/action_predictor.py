@@ -351,18 +351,66 @@ def call_llm_api(
     通过 OpenAI 兼容 API 调用模型，返回生成文本。
     适用于 vLLM / 任意 OpenAI 兼容服务。
     """
-    from openai import OpenAI
+    from openai import BadRequestError, OpenAI
+
+    def _parse_allowed_max_tokens_from_error(msg: str) -> Optional[int]:
+        """
+        从常见上下文超限报错中解析“当前请求最多还能给多少 completion tokens”。
+        典型格式：
+        "... maximum context length is 4096 tokens and your request has 2148 input tokens ..."
+        """
+        if not msg:
+            return None
+        m = re.search(
+            r"maximum context length is\s+(\d+)\s+tokens.*?your request has\s+(\d+)\s+input tokens",
+            msg,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not m:
+            return None
+        try:
+            max_ctx = int(m.group(1))
+            input_tokens = int(m.group(2))
+        except (TypeError, ValueError):
+            return None
+        # 预留少量安全缓冲，避免边界抖动再次触发 400
+        return max(1, max_ctx - input_tokens - 16)
 
     client = OpenAI(base_url=api_base, api_key=api_key)
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": instruction},
-            {"role": "user", "content": input_text},
-        ],
-        max_tokens=max_new_tokens,
-        temperature=temperature if temperature > 0 else 0.01,
-    )
+    max_tokens_req = max(1, int(max_new_tokens))
+    last_err: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": instruction},
+                    {"role": "user", "content": input_text},
+                ],
+                max_tokens=max_tokens_req,
+                temperature=temperature if temperature > 0 else 0.01,
+            )
+            break
+        except BadRequestError as e:
+            last_err = e
+            err_msg = str(e)
+            allowed = _parse_allowed_max_tokens_from_error(err_msg)
+            # 仅对“max_tokens 过大”类问题做一次动态缩小重试
+            if attempt == 0 and allowed is not None and allowed < max_tokens_req:
+                print(
+                    f"[LLM-API] max_tokens 动态收缩: {max_tokens_req} -> {allowed} "
+                    f"(model={model_name})",
+                    flush=True,
+                )
+                max_tokens_req = max(1, allowed)
+                continue
+            raise
+    else:
+        # 理论上不会走到这里；保险兜底
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("LLM API 调用失败：未知错误")
+
     out = response.choices[0].message.content.strip()
     if debug_emit:
         emit_llm_debug(
@@ -514,49 +562,91 @@ def build_behavior_discrepancies(
     对比预测与真实，构造偏差信号文本，供画像精炼 prompt 使用。
     """
     parts = []
+    seen_signatures = set()
+
+    def _normalized_scenario_for_dedup(s: str) -> str:
+        """
+        去重时忽略首行的误差标签（如 [TEXT_GENERATION]/[DECISION_ONLY]），
+        只比较后续核心内容，避免“内容完全相同但标签不同”重复输出。
+        """
+        lines = [ln.strip() for ln in (s or "").splitlines() if ln.strip()]
+        if lines and lines[0].startswith("[") and lines[0].endswith("]"):
+            lines = lines[1:]
+        return "\n".join(lines)
+
+    def _append_unique(
+        scenario_context: str,
+        object_block: str,
+        predicted_action: str,
+        actual_action: str,
+    ) -> None:
+        sig = (
+            _normalized_scenario_for_dedup(scenario_context),
+            (object_block or "").strip(),
+            (predicted_action or "").strip(),
+            (actual_action or "").strip(),
+        )
+        if sig in seen_signatures:
+            return
+        seen_signatures.add(sig)
+        parts.append(DISCREPANCY_TEMPLATE.format(
+            idx=len(parts) + 1,
+            scenario_context=scenario_context,
+            object_block=object_block,
+            predicted_action=predicted_action,
+            actual_action=actual_action,
+        ))
     for i, (pred, actual) in enumerate(zip(predictions, actuals)):
         actual_type = actual.get("action_type", "unknown")
         actual_text = actual.get("action_text") or actual.get("target") or ""
         pred_type = pred.get("action_type", "unknown")
         pred_text = pred.get("content") or ""
 
-        # 只记录存在偏差的场景
+        # 一条动作可拆分为两类误差：
+        # 1) TEXT_GENERATION：post/reply 的文本生成误差
+        # 2) DECISION_ONLY：动作类型判定误差
+        # 这样总条数不再固定受窗口长度限制（可 > len(window)）
         type_diff = pred_type != actual_type
-        text_diff = actual_type in ("post", "reply")
 
-        if type_diff or text_diff:
-            # 标注误差类型：内容生成 / 交互决策
-            if actual_type in ("post", "reply"):
-                scenario_ctx = (
-                    "[TEXT_GENERATION] 内容生成误差\n"
-                    f"Decision type predicted: {pred_type}; actual type: {actual_type}"
-                )
-            else:
-                scenario_ctx = (
-                    "[DECISION_ONLY] 交互决策误差\n"
-                    f"Decision type predicted: {pred_type}; actual type: {actual_type}"
-                )
-            predicted = f"{pred_type}" + (f': "{pred_text[:200]}"' if pred_text else "")
-            # reply：action_text 为用户回复；target 为被回复对象，须单独展示
-            if actual_type == "reply":
-                u_reply = (actual.get("action_text") or "")[:200]
-                actual_str = f"{actual_type} (user reply: \"{u_reply}\")" if u_reply else f"{actual_type}"
-            else:
-                actual_str = f"{actual_type}" + (f': "{actual_text[:200]}"' if actual_text else "")
+        predicted = f"{pred_type}" + (f': "{pred_text[:200]}"' if pred_text else "")
+        # reply：action_text 为用户回复；target 为被回复对象，须单独展示
+        if actual_type == "reply":
+            u_reply = (actual.get("action_text") or "")[:200]
+            actual_str = f'{actual_type}: "{u_reply}"' if u_reply else f"{actual_type}"
+        else:
+            actual_str = f"{actual_type}" + (f': "{actual_text[:200]}"' if actual_text else "")
 
-            object_block = ""
-            if actual_type == "reply":
-                replied_to = (actual.get("target") or "")[:500]
-                if replied_to:
-                    object_block = f'Replied-to original post/comment: "{replied_to}"\n'
+        object_block = ""
+        if actual_type == "reply":
+            replied_to = (actual.get("target") or "")[:500]
+            if replied_to:
+                object_block = f'Replied-to original post/comment: "{replied_to}"\n'
 
-            parts.append(DISCREPANCY_TEMPLATE.format(
-                idx=len(parts) + 1,
+        # 文本生成类：post/reply 都记录（反映内容层信号）
+        if actual_type in ("post", "reply"):
+            scenario_ctx = (
+                "[TEXT_GENERATION] \n"
+                f"Decision type predicted: {pred_type}; actual type: {actual_type}"
+            )
+            _append_unique(
                 scenario_context=scenario_ctx,
                 object_block=object_block,
                 predicted_action=predicted,
                 actual_action=actual_str,
-            ))
+            )
+
+        # 交互决策类：只在类型误判时记录（包括 post/reply）
+        if type_diff:
+            scenario_ctx = (
+                "[DECISION_ONLY] \n"
+                f"Decision type predicted: {pred_type}; actual type: {actual_type}"
+            )
+            _append_unique(
+                scenario_context=scenario_ctx,
+                object_block=object_block,
+                predicted_action=predicted,
+                actual_action=actual_str,
+            )
 
     if not parts:
         return "No significant discrepancies detected."

@@ -17,7 +17,7 @@ SENTENCE_TRANSFORMER_MODEL = "/data/LLM_models/sentence-transformers/all-mpnet-b
 # ============================================================================
 USE_VLLM_API = True
 
-PROFILE_API_BASE = "http://175.6.27.230:8001/v1"
+PROFILE_API_BASE = "http://localhost:8001/v1"
 PROFILE_API_MODEL = "Meta-Llama-3-8B-Instruct"
 
 # 商用画像模型（候选画像混合生成）
@@ -64,23 +64,25 @@ ACTION_WEIGHTS = {
 }
 
 # 综合得分 Q(S) = ALPHA * F(S) + (1 - ALPHA) * L(S)
-ALPHA = 0.4
+ALPHA = 0.3
+# 是否将语义相似度 L 从 [-1, 1] 归一化到 [0, 1] 后再参与 Q 计算
+NORMALIZE_L_TO_UNIT = True
 
 # ============================================================================
 # DPO 对构造阈值
 # ============================================================================
 NUM_CANDIDATE_PROFILES = 10   # 每轮精炼候选画像数
-TAU_PLUS = 0.05               # 正向阈值
+TAU_PLUS = 0.05               # 正向阈值，有明确的提升
 TAU_MINUS = 0             # 负向阈值
-DELTA = 0.1                  # 正负对之间最小差距
-
+DELTA = 0.05                  # 正负对之间最小差距
+ABS_DELTA = DELTA*2        # 正负对之间最小差距的绝对值，有绝对的负方向
 # ============================================================================
 # 模型推理参数
 # ============================================================================
 MAX_NEW_TOKENS_PROFILE = 2048     # 画像生成最大 token
 MAX_NEW_TOKENS_ACTION = 512       # 动作预测最大 token
 TEMPERATURE_PROFILE = 0.8         # 画像候选多样性
-TEMPERATURE_ACTION = 0.3          # 动作预测倾向确定性
+TEMPERATURE_ACTION = 0         # 动作预测倾向确定性
 
 # ============================================================================
 # Debug：打印每次 LLM 请求/响应（由 --debug 或 DEBUG_LLM=True 开启）
@@ -106,4 +108,6 @@ DEBUG_LLM_INCLUDE_ACTIONS = False
 # ============================================================================
 # 并发参数（DPO 评估与候选画像生成）
 # ============================================================================
-DPO_WORKERS = 4
+DPO_WORKERS = 10
+# DPO 滚动轮次（第1轮 S0->候选，选最优作为 S1；第2轮窗口前移继续）
+DPO_ROUNDS = 2

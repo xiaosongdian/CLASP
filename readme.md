@@ -401,6 +401,17 @@ for f in output/windowed/train/community_*.jsonl; do
   python -m src.dpo_pipeline --input "$f" --output-dir output/dpo
 done
 ```
+
+### Step 4（推荐）：一条命令批量处理目录
+
+`src/dpo_pipeline.py` 已支持目录批量输入，可直接一次处理整个 `output/windowed/train`：
+
+```bash
+python -m src.dpo_pipeline \
+  --input-dir output/windowed/train \
+  --input-glob "community_*.jsonl" \
+  --output-dir output/dpo
+```
 # Clasp 项目说明
 
 这是一个用于社交行为数据处理与训练数据构造的项目。
