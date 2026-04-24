@@ -17,7 +17,7 @@ SENTENCE_TRANSFORMER_MODEL = "/data/LLM_models/sentence-transformers/all-mpnet-b
 # ============================================================================
 USE_VLLM_API = True
 
-PROFILE_API_BASE = "http://localhost:8001/v1"
+PROFILE_API_BASE = "http://175.6.27.230:8001/v1"
 PROFILE_API_MODEL = "Meta-Llama-3-8B-Instruct"
 
 # 商用画像模型（候选画像混合生成）
@@ -32,6 +32,7 @@ ACTION_API_BASE = "http://localhost:8002/v1"
 ACTION_API_MODEL = "Meta-Llama-3-8B-Instruct-bluesky-sft"
 
 # ============================================================================
+
 # 测试模式（用单个远程 API 替代所有 LLM，跑通 pipeline 用）
 # ============================================================================
 TEST_MODE = False

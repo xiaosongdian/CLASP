@@ -368,12 +368,70 @@ def process_single_user(
         )
         num_candidates_last_round = len(candidates)
 
-        # candidate scoring (parallel)
+        # candidate quick screening: 先只算 W1（当前窗口）
+        quick_w1_scores: List[Optional[Tuple[float, float, float]]] = [None] * len(candidates)
+
+        def _score_w1_one(i: int, cand: str) -> tuple[int, Tuple[float, float, float]]:
+            f1_, l1_, q1_ = evaluate_profile_on_window(
+                cand, w_pre, w_cur, action_model, action_tokenizer, semantic_scorer
+            )
+            return i, (f1_, l1_, q1_)
+
+        eff_workers = max(1, min(int(workers), len(candidates)))
+        if eff_workers == 1:
+            for i, cand in enumerate(candidates):
+                idx, w1_score = _score_w1_one(i, cand)
+                quick_w1_scores[idx] = w1_score
+        else:
+            with ThreadPoolExecutor(max_workers=eff_workers, thread_name_prefix="candquick") as pool:
+                futs = {pool.submit(_score_w1_one, i, cand): i for i, cand in enumerate(candidates)}
+                for fut in as_completed(futs):
+                    idx, w1_score = fut.result()
+                    quick_w1_scores[idx] = w1_score
+
+        improved_indices: List[int] = []
+        for i, w1_score in enumerate(quick_w1_scores):
+            if w1_score is None:
+                continue
+            q1 = w1_score[2]
+            gain = q1 - cq1
+            if gain > 0:
+                improved_indices.append(i)
+            print(
+                f"  Round{ridx+1} 候选 {i+1}: quick_Q_W1={q1:.4f} "
+                f"(vs baseline {cq1:.4f}, gain={gain:+.4f})",
+                flush=True,
+            )
+
+        if not improved_indices:
+            print(
+                f"[User {uid}] Round {ridx + 1} 所有候选在 {window_keys[ridx+1]}(rel_W1) 均未超过 baseline，"
+                f"跳过本轮剩余窗口计算与DPO构造",
+                flush=True,
+            )
+            round_summaries.append(
+                {
+                    "round_idx": ridx + 1,
+                    "window_triplet": [window_keys[ridx], window_keys[ridx + 1], window_keys[ridx + 2]],
+                    "num_candidates": len(candidates),
+                    "num_dpo_pairs": 0,
+                    "best_candidate_idx": None,
+                    "best_r_all": None,
+                    "skip_reason": "no_candidate_improves_w1_over_baseline",
+                }
+            )
+            continue
+
+        # candidate full scoring (parallel)
         candidate_scores_list: List[Optional[Dict[str, Tuple[float, float, float]]]] = [None] * len(candidates)
 
         def _score_one(i: int, cand: str) -> tuple[int, Dict[str, Tuple[float, float, float]], float]:
+            # 复用 quick 阶段已计算的 W1，避免重复调用
+            w1_cached = quick_w1_scores[i]
+            if w1_cached is None:
+                raise RuntimeError(f"Round{ridx+1} 候选 {i+1} 缺少 quick_W1 缓存结果")
             s0_, s1_, s2_ = evaluate_profile_on_window(cand, [], w_pre, action_model, action_tokenizer, semantic_scorer)
-            s3_, s4_, s5_ = evaluate_profile_on_window(cand, w_pre, w_cur, action_model, action_tokenizer, semantic_scorer)
+            s3_, s4_, s5_ = w1_cached
             s6_, s7_, s8_ = evaluate_profile_on_window(cand, w_cur, w_fut, action_model, action_tokenizer, semantic_scorer)
             cand_scores = {
                 "W0": (s0_, s1_, s2_),
