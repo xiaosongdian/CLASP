@@ -12,11 +12,12 @@ DPO 全流程 Pipeline
 
 import argparse
 import json
+import multiprocessing
 import os
 import random
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,6 +29,8 @@ from src.config import (
     ABS_DELTA,
     DELTA,
     DPO_ROUNDS,
+    DPO_USER_PROCESSES,
+    DPO_USER_PROCESS_STAGGER_SEC,
     DPO_WORKERS,
     NUM_CANDIDATE_PROFILES,
     PROFILE_API_BASE,
@@ -46,6 +49,117 @@ from src.profile_generator import (
     generate_initial_profile,
 )
 from src.scorer import SemanticScorer, evaluate_predictions
+
+
+def _format_duration_s(sec: float) -> str:
+    """将秒数格式化为易读短字符串；无效输入返回 "—"."""
+    if sec is None or sec != sec or sec < 0:  # nan or neg
+        return "—"
+    if sec < 60:
+        return f"{sec:.1f}s"
+    if sec < 3600:
+        m, s = divmod(sec, 60.0)
+        return f"{int(m)}m{s:.0f}s"
+    h, r = divmod(sec, 3600.0)
+    m, s = divmod(r, 60.0)
+    return f"{int(h)}h{int(m)}m{s:.0f}s"
+
+
+def _dbg_print(*args, **kwargs) -> None:
+    if cfg.DEBUG_LLM:
+        kwargs.setdefault("flush", True)
+        print(*args, **kwargs)
+
+
+def _print_user_finish_report(
+    result: Dict[str, Any],
+    done_in_batch: int,
+    total_in_batch: int,
+    user_elapsed_sec: float,
+    batch_elapsed_sec: float,
+) -> None:
+    """
+    非 debug 模式下每完成一个用户打印一行：进度、DPO 对数/候选/各轮、本用户与本批耗时、ETA。
+    """
+    n_pairs = int(result.get("num_dpo_pairs", 0) or 0)
+    n_cand = int(result.get("num_candidates", 0) or 0)
+    rdist = result.get("round_pair_distribution")
+    if rdist is None and result.get("rounds"):
+        rsum = result["rounds"]
+        rdist = {f"round_{x['round_idx']}": x.get("num_dpo_pairs", 0) for x in rsum if isinstance(x, dict)}
+    rdist = rdist or {}
+    if total_in_batch <= 0:
+        pct, eta_s = 0.0, 0.0
+    else:
+        pct = 100.0 * done_in_batch / total_in_batch
+        rem = max(0, total_in_batch - done_in_batch)
+        if rem > 0 and done_in_batch > 0 and batch_elapsed_sec > 0:
+            avg = batch_elapsed_sec / done_in_batch
+            eta_s = avg * rem
+        else:
+            eta_s = 0.0
+    eta_str = (
+        _format_duration_s(eta_s)
+        if (total_in_batch and done_in_batch < total_in_batch)
+        else "0s"
+    )
+    print(
+        f"[Pipeline] 完成 {done_in_batch}/{total_in_batch} ({pct:.1f}%) | "
+        f"DPO对={n_pairs} 末轮候选={n_cand} 各轮{rdist} | "
+        f"本用户={_format_duration_s(user_elapsed_sec)} 本批={_format_duration_s(batch_elapsed_sec)} "
+        f"预计剩余={eta_str}",
+        flush=True,
+    )
+
+
+def _dpo_terminate_orphan_processes() -> None:
+    """终止当前 Python 仍知的 multiprocessing 子进程，避免 Ctrl+C 后主进程退出后子进程仍存活。"""
+    for p in list(multiprocessing.active_children()):
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    for p in list(multiprocessing.active_children()):
+        try:
+            p.join(timeout=2.0)
+        except Exception:
+            pass
+    for p in list(multiprocessing.active_children()):
+        if not p.is_alive():
+            continue
+        try:
+            if hasattr(p, "kill"):
+                p.kill()  # Py3.7+
+        except Exception:
+            pass
+        try:
+            p.join(timeout=1.0)
+        except Exception:
+            pass
+
+
+def _dpo_shutdown_process_pool(
+    pool: Optional[ProcessPoolExecutor],
+    pending_futs: Any,
+) -> None:
+    """取消未起任务、关闭进程池；随后清理残留子进程（尽量温和→强制）。"""
+    if pool is None:
+        return
+    if isinstance(pending_futs, dict):
+        for fut in list(pending_futs.keys()):
+            try:
+                fut.cancel()
+            except Exception:
+                pass
+    try:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            pool.shutdown(wait=False)
+    except Exception:
+        pass
+    time.sleep(0.15)
+    _dpo_terminate_orphan_processes()
 
 
 # ============================================================================
@@ -275,15 +389,14 @@ def process_single_user(
     max_rounds_by_data = max(0, len(window_keys) - 2)
     effective_rounds = max(1, min(rounds, max_rounds_by_data)) if max_rounds_by_data > 0 else 0
 
-    print(f"\n{'='*60}", flush=True)
-    print(f"[User {uid}] 社区={cid}", flush=True)
-    print(
+    _dbg_print(f"\n{'='*60}")
+    _dbg_print(f"[User {uid}] 社区={cid}")
+    _dbg_print(
         f"[User {uid}] 计划轮次={rounds}，可用轮次={effective_rounds} "
         f"(windows={window_keys})",
-        flush=True,
     )
     if effective_rounds == 0:
-        print(f"[User {uid}] 可用窗口不足，跳过", flush=True)
+        _dbg_print(f"[User {uid}] 可用窗口不足，跳过")
         return {
             "user_id": uid,
             "community_id": cid,
@@ -296,10 +409,10 @@ def process_single_user(
         }
 
     # === Step 1: 生成初始画像 S0 ===
-    print(f"[User {uid}] Step 1: 生成初始画像 S0 ...", flush=True)
+    _dbg_print(f"[User {uid}] Step 1: 生成初始画像 S0 ...")
     w0 = windows[window_keys[0]]
     s0 = generate_initial_profile(profile_model, profile_tokenizer, w0)
-    print(f"[User {uid}] S0 长度: {len(s0)} chars", flush=True)
+    _dbg_print(f"[User {uid}] S0 长度: {len(s0)} chars")
     current_profile = s0
     all_round_dpo_pairs: List[Dict[str, Any]] = []
     round_summaries: List[Dict[str, Any]] = []
@@ -311,10 +424,9 @@ def process_single_user(
         w_cur = windows[window_keys[ridx + 1]]
         w_fut = windows[window_keys[ridx + 2]]
 
-        print(
+        _dbg_print(
             f"[User {uid}] Round {ridx + 1}/{effective_rounds} "
             f"(windows={window_keys[ridx]},{window_keys[ridx+1]},{window_keys[ridx+2]})",
-            flush=True,
         )
 
         # baseline scores for current round profile
@@ -330,12 +442,11 @@ def process_single_user(
         base_scores = {"W0": (cf0, cl0, cq0), "W1": (cf1, cl1, cq1), "W2": (cf2, cl2, cq2)}
         if ridx == 0:
             s0_scores_for_return = base_scores
-        print(
+        _dbg_print(
             f"[User {uid}] Round {ridx + 1} baseline scores: "
             f"{window_keys[ridx]}(rel_W0)=Q{cq0:.4f}, "
             f"{window_keys[ridx+1]}(rel_W1)=Q{cq1:.4f}, "
             f"{window_keys[ridx+2]}(rel_W2)=Q{cq2:.4f}",
-            flush=True,
         )
 
         # discrepancies on current window
@@ -346,7 +457,7 @@ def process_single_user(
         discrepancies = build_behavior_discrepancies(preds_cur, w_cur, w_pre)
 
         if cfg.DEBUG_LLM:
-            print(
+            _dbg_print(
                 "\n"
                 + "=" * 72
                 + f"\n[DEBUG][User {uid}] Round {ridx + 1} 行为偏差全文\n"
@@ -356,7 +467,6 @@ def process_single_user(
                 + "\n"
                 + "=" * 72
                 + "\n",
-                flush=True,
             )
 
         # candidate generation
@@ -397,17 +507,15 @@ def process_single_user(
             gain = q1 - cq1
             if gain > 0:
                 improved_indices.append(i)
-            print(
+            _dbg_print(
                 f"  Round{ridx+1} 候选 {i+1}: quick_Q_W1={q1:.4f} "
                 f"(vs baseline {cq1:.4f}, gain={gain:+.4f})",
-                flush=True,
             )
 
         if not improved_indices:
-            print(
+            _dbg_print(
                 f"[User {uid}] Round {ridx + 1} 所有候选在 {window_keys[ridx+1]}(rel_W1) 均未超过 baseline，"
                 f"跳过本轮剩余窗口计算与DPO构造",
-                flush=True,
             )
             round_summaries.append(
                 {
@@ -420,6 +528,12 @@ def process_single_user(
                     "skip_reason": "no_candidate_improves_w1_over_baseline",
                 }
             )
+            if ridx == 0 and effective_rounds > 1:
+                _dbg_print(
+                    f"[User {uid}] 首轮 DPO=0（无 W1 改进），跳过后续 {effective_rounds - 1} 轮",
+                )
+            if ridx == 0:
+                break
             continue
 
         # candidate full scoring (parallel)
@@ -447,7 +561,9 @@ def process_single_user(
                 idx, cand_scores, r_all = _score_one(i, cand)
                 candidate_scores_list[idx] = cand_scores
                 c0, c1, c2 = cand_scores["W0"][2], cand_scores["W1"][2], cand_scores["W2"][2]
-                print(f"  Round{ridx+1} 候选 {idx+1}: Q_W0={c0:.4f} Q_W1={c1:.4f} Q_W2={c2:.4f} r_all={r_all:+.4f}", flush=True)
+                _dbg_print(
+                    f"  Round{ridx+1} 候选 {idx+1}: Q_W0={c0:.4f} Q_W1={c1:.4f} Q_W2={c2:.4f} r_all={r_all:+.4f}"
+                )
         else:
             with ThreadPoolExecutor(max_workers=eff_workers, thread_name_prefix="candscore") as pool:
                 futs = {pool.submit(_score_one, i, cand): i for i, cand in enumerate(candidates)}
@@ -455,7 +571,9 @@ def process_single_user(
                     idx, cand_scores, r_all = fut.result()
                     candidate_scores_list[idx] = cand_scores
                     c0, c1, c2 = cand_scores["W0"][2], cand_scores["W1"][2], cand_scores["W2"][2]
-                    print(f"  Round{ridx+1} 候选 {idx+1}: Q_W0={c0:.4f} Q_W1={c1:.4f} Q_W2={c2:.4f} r_all={r_all:+.4f}", flush=True)
+                    _dbg_print(
+                        f"  Round{ridx+1} 候选 {idx+1}: Q_W0={c0:.4f} Q_W1={c1:.4f} Q_W2={c2:.4f} r_all={r_all:+.4f}"
+                    )
         candidate_scores_list = [s for s in candidate_scores_list if s is not None]
 
         # DPO pairs for this round
@@ -464,22 +582,14 @@ def process_single_user(
             p["round_idx"] = ridx + 1
             p["window_triplet"] = [window_keys[ridx], window_keys[ridx + 1], window_keys[ridx + 2]]
         all_round_dpo_pairs.extend(round_pairs)
-        print(
+        _dbg_print(
             f"[User {uid}] Round {ridx + 1} 生成 DPO 对数量: {len(round_pairs)}",
-            flush=True,
         )
 
         # choose best candidate as next-round profile
         rewards = _compute_candidate_rewards(base_scores, candidate_scores_list)
         best_idx = max(range(len(rewards)), key=lambda i: rewards[i]) if rewards else 0
         best_r_all = rewards[best_idx] if rewards else 0.0
-        if ridx < effective_rounds - 1:
-            current_profile = candidates[best_idx]
-            print(
-                f"[User {uid}] Round {ridx + 1} 选择最佳候选 idx={best_idx + 1} "
-                f"作为 S{ridx + 1} (r_all={best_r_all:+.4f})",
-                flush=True,
-            )
 
         round_summaries.append(
             {
@@ -492,12 +602,25 @@ def process_single_user(
             }
         )
 
+        if ridx == 0 and len(round_pairs) == 0 and effective_rounds > 1:
+            _dbg_print(
+                f"[User {uid}] 首轮 DPO=0（阈值下未构出对），跳过后续 {effective_rounds - 1} 轮",
+            )
+            break
+
+        if ridx < effective_rounds - 1:
+            current_profile = candidates[best_idx]
+            _dbg_print(
+                f"[User {uid}] Round {ridx + 1} 选择最佳候选 idx={best_idx + 1} "
+                f"作为 S{ridx + 1} (r_all={best_r_all:+.4f})",
+            )
+
     round_pair_dist = {f"round_{r['round_idx']}": r["num_dpo_pairs"] for r in round_summaries}
-    print(
-        f"[User {uid}] 轮次DPO分布: {round_pair_dist}",
-        flush=True,
+    _dbg_print(f"[User {uid}] 轮次DPO分布: {round_pair_dist}")
+    _dbg_print(
+        f"[User {uid}] 总计生成 {len(all_round_dpo_pairs)} 个 DPO 对 "
+        f"（执行 {len(round_summaries)}/{effective_rounds} 轮）",
     )
-    print(f"[User {uid}] 总计生成 {len(all_round_dpo_pairs)} 个 DPO 对（{effective_rounds} 轮）", flush=True)
     return {
         "user_id": uid,
         "community_id": cid,
@@ -512,6 +635,56 @@ def process_single_user(
 
 
 # ============================================================================
+# 多进程子进程入口（需模块顶层，便于 ProcessPool 可 pickle；子进程内仍用 DPO_WORKERS 线程评候选）
+# ============================================================================
+
+
+def _dpo_user_worker(
+    job: Tuple[int, Dict[str, Any], int, int, Optional[str], float],
+) -> Tuple[int, Dict[str, Any], float]:
+    """
+    在独立进程中为单个用户跑完整 DPO 流程；进程内再按候选数用 ThreadPool（见 process_single_user）。
+
+    job: (下标, user_data, workers, rounds, semantic_scorer_device, stagger_sec)
+    stagger_sec: 第 i 个用户先 sleep i*stagger_sec 再加载模型/调 API，减轻多进程同时洪峰；0 表示不等待。
+    返回: (下标, result_dict, 处理耗时秒，不含错开等待)
+    """
+    idx, user_data, workers, rounds, sem_device, stagger_sec = job
+    if stagger_sec > 0.0 and idx > 0:
+        time.sleep(float(idx) * float(stagger_sec))
+    t0 = time.time()
+    semantic_scorer = SemanticScorer(device=sem_device)
+    profile_model, profile_tokenizer = None, None
+    action_model, action_tokenizer = None, None
+    result = process_single_user(
+        user_data,
+        profile_model,
+        profile_tokenizer,
+        action_model,
+        action_tokenizer,
+        semantic_scorer,
+        workers=workers,
+        rounds=rounds,
+    )
+    return idx, result, time.time() - t0
+
+
+def _scorer_device_for_parallel_runs(
+    override: Optional[str] = None,
+) -> Optional[str]:
+    """
+    多用户多进程时每个子进程会各自加载一份 Sentence-Transformer，默认用 CPU 避免多份同驻 GPU 导致 OOM。
+    可传 override 或 config.DPO_SCORER_DEVICE 覆盖。
+    """
+    if override is not None and str(override).strip() != "":
+        return override
+    cfg_dev = getattr(cfg, "DPO_SCORER_DEVICE", None)
+    if cfg_dev:
+        return cfg_dev
+    return "cpu"
+
+
+# ============================================================================
 # 主入口
 # ============================================================================
 
@@ -521,9 +694,12 @@ def run_dpo_pipeline(
     max_users: int = None,
     random_seed: Optional[int] = None,
     workers: int = DPO_WORKERS,
+    user_processes: int = DPO_USER_PROCESSES,
+    user_process_stagger_sec: Optional[float] = None,
     rounds: int = DPO_ROUNDS,
     do_preflight: bool = True,
     resume: bool = False,
+    scorer_device: Optional[str] = None,
 ) -> None:
     """
     DPO Pipeline 主入口。
@@ -559,14 +735,12 @@ def run_dpo_pipeline(
         )
     if max_users:
         users = users[:max_users]
+    n_up = int(max(1, user_processes or 1))
     print(
-        f"[Pipeline] 处理 {len(users)} 个用户（本 run），候选并发 workers={workers}，rounds={rounds}",
+        f"[Pipeline] 处理 {len(users)} 个用户（本 run），候选线程 workers={workers}，"
+        f"用户进程数 user_processes={n_up}，rounds={rounds}",
         flush=True,
     )
-
-    # 加载 semantic scorer（唯一需要本地加载的模型）
-    print("[Pipeline] 加载 Semantic Scorer ...", flush=True)
-    semantic_scorer = SemanticScorer()
 
     # LLM 已通过 vLLM 服务事先启动，无需本地加载
     profile_model, profile_tokenizer = None, None
@@ -635,54 +809,180 @@ def run_dpo_pipeline(
             flush=True,
         )
 
+    effective_procs = min(n_up, len(pending_users)) if len(pending_users) else 0
+    use_parallel_users = effective_procs > 1
+    semantic_scorer: Optional[SemanticScorer] = None
+    sem_parallel: Optional[str] = None
+    if len(pending_users) > 0:
+        if use_parallel_users:
+            sem_parallel = _scorer_device_for_parallel_runs(override=scorer_device)
+            print(
+                f"[Pipeline] 多进程: {effective_procs} 个进程并行不同用户；"
+                f"每进程内候选评估仍用 ThreadPool（最多 {workers} 线程）。"
+                f"Sentence-Transformer: {sem_parallel}",
+                flush=True,
+            )
+        else:
+            print("[Pipeline] 加载 Semantic Scorer（主进程、单路用户）...", flush=True)
+            d_single = scorer_device
+            if d_single is None and getattr(cfg, "DPO_SCORER_DEVICE", None):
+                d_single = str(cfg.DPO_SCORER_DEVICE)
+            if d_single is not None and str(d_single).strip() == "":
+                d_single = None
+            semantic_scorer = SemanticScorer(device=d_single)
+
+    stagger_resolved = float(
+        DPO_USER_PROCESS_STAGGER_SEC
+        if user_process_stagger_sec is None
+        else (user_process_stagger_sec or 0.0)
+    )
+    if use_parallel_users and len(pending_users) > 0 and stagger_resolved > 0:
+        print(
+            f"[Pipeline] 多用户错开启动: 第 i 个用户任务在子进程内先等待 i×{stagger_resolved:.2f}s，"
+            f"再加载模型/请求（减轻 API 同时洪峰）",
+            flush=True,
+        )
+
+    def _flush_one_user(
+        result: Dict[str, Any],
+        fp_pairs,
+        fp_detail,
+    ) -> int:
+        """
+        将单用户结果落盘（detail 整包一行 + 每条 DPO 对），并 flush+fsync。
+        串行/多进程路径均在「每个用户处理完毕」时调用，故 --resume 可按用户粒度恢复未完成的 user。
+        """
+        nonlocal total_pairs_written
+        fp_detail.write(json.dumps(result, ensure_ascii=False) + "\n")
+        fp_detail.flush()
+        os.fsync(fp_detail.fileno())
+        user_pairs_written = 0
+        for p in result["dpo_pairs"]:
+            p.setdefault("round_idx", 1)
+            p.setdefault("round_tag", f"round_{p['round_idx']}")
+            p.setdefault("user_id", result.get("user_id"))
+            p.setdefault("community_id", result.get("community_id"))
+            fp_pairs.write(json.dumps(p, ensure_ascii=False) + "\n")
+            user_pairs_written += 1
+        fp_pairs.flush()
+        os.fsync(fp_pairs.fileno())
+        total_pairs_written += user_pairs_written
+        return user_pairs_written
+
     run_start = time.time()
     with pairs_file.open("a", encoding="utf-8") as fp_pairs, detail_progress_file.open("a", encoding="utf-8") as fp_detail:
-        for i, user_data in enumerate(pending_users):
-            print(f"\n[Pipeline] 处理用户 {i+1}/{len(pending_users)}", flush=True)
-            t0 = time.time()
-            result = process_single_user(
-                user_data,
-                profile_model, profile_tokenizer,
-                action_model, action_tokenizer,
-                semantic_scorer,
-                workers=workers,
-                rounds=rounds,
-            )
-            elapsed = time.time() - t0
-            print(f"[Pipeline] 用户 {result['user_id']} 完成，耗时 {elapsed:.1f}s", flush=True)
-            print(
-                f"[Pipeline] 用户 {result['user_id']} DPO轮次分布: "
-                f"{result.get('round_pair_distribution', {})}",
-                flush=True,
-            )
-
-            all_results.append(result)
-            processed_user_ids.add(str(result.get("user_id")))
-
-            # 先写入 detail 进度，标记该用户已完成（用于 resume 跳过）
-            fp_detail.write(json.dumps(result, ensure_ascii=False) + "\n")
-            fp_detail.flush()
-            os.fsync(fp_detail.fileno())
-
-            user_pairs_written = 0
-            for p in result["dpo_pairs"]:
-                # 兜底：确保每条 DPO 对都带轮次信息
-                p.setdefault("round_idx", 1)
-                p.setdefault("round_tag", f"round_{p['round_idx']}")
-                p.setdefault("user_id", result.get("user_id"))
-                p.setdefault("community_id", result.get("community_id"))
-                fp_pairs.write(json.dumps(p, ensure_ascii=False) + "\n")
-                user_pairs_written += 1
-
-            # 每完成一个用户就落盘，尽量避免中途中断导致已生成 DPO 对丢失
-            fp_pairs.flush()
-            os.fsync(fp_pairs.fileno())
-            total_pairs_written += user_pairs_written
-            print(
-                f"[Pipeline] 用户 {result['user_id']} DPO 对已增量写入 {user_pairs_written} 条 "
-                f"(累计 {total_pairs_written} 条)",
-                flush=True,
-            )
+        if not pending_users:
+            pass
+        elif use_parallel_users:
+            jobs = [
+                (i, u, workers, rounds, sem_parallel, stagger_resolved)
+                for i, u in enumerate(pending_users)
+            ]
+            done_ct = 0
+            n_pending = len(pending_users)
+            results_by_idx: Dict[int, Dict[str, Any]] = {}
+            pool: Optional[ProcessPoolExecutor] = None
+            futs_dict: Dict[Any, int] = {}
+            try:
+                pool = ProcessPoolExecutor(max_workers=effective_procs)
+                futs_dict = {pool.submit(_dpo_user_worker, job): job[0] for job in jobs}
+                for fut in as_completed(futs_dict):
+                    idx, result, user_wall_sec = fut.result()
+                    done_ct += 1
+                    results_by_idx[idx] = result
+                    pws = _flush_one_user(result, fp_pairs, fp_detail)
+                    batch_elapsed = time.time() - run_start
+                    if cfg.DEBUG_LLM:
+                        print(
+                            f"\n[Pipeline] 多进程完成 {done_ct}/{n_pending} "
+                            f"(user_id={result.get('user_id')})",
+                            flush=True,
+                        )
+                        print(
+                            f"[Pipeline] 用户 {result['user_id']} DPO轮次分布: "
+                            f"{result.get('round_pair_distribution', {})}",
+                            flush=True,
+                        )
+                        print(
+                            f"[Pipeline] 用户 {result['user_id']} DPO 对已增量写入 {pws} 条 "
+                            f"(累计 {total_pairs_written} 条)",
+                            flush=True,
+                        )
+                    else:
+                        _print_user_finish_report(
+                            result,
+                            done_ct,
+                            n_pending,
+                            user_wall_sec,
+                            batch_elapsed,
+                        )
+            except KeyboardInterrupt:
+                print(
+                    "\n[Pipeline] 收到中断 (Ctrl+C)，正在结束子进程并取消未完成任务…",
+                    flush=True,
+                )
+                _dpo_shutdown_process_pool(pool, futs_dict)
+                raise
+            except Exception:
+                _dpo_shutdown_process_pool(pool, futs_dict)
+                raise
+            else:
+                if pool is not None:
+                    try:
+                        try:
+                            pool.shutdown(wait=True, cancel_futures=False)
+                        except TypeError:
+                            pool.shutdown(wait=True)
+                    except Exception:
+                        pass
+            finally:
+                _dpo_terminate_orphan_processes()
+            for k in range(n_pending):
+                if k not in results_by_idx:
+                    raise RuntimeError(f"缺失待处理下标 {k} 的结果")
+            for k in range(n_pending):
+                all_results.append(results_by_idx[k])
+                processed_user_ids.add(str(results_by_idx[k].get("user_id")))
+        else:
+            for i, user_data in enumerate(pending_users):
+                if cfg.DEBUG_LLM:
+                    print(f"\n[Pipeline] 处理用户 {i+1}/{len(pending_users)}", flush=True)
+                t0 = time.time()
+                if semantic_scorer is None:
+                    raise RuntimeError("Internal: semantic_scorer 未初始化")
+                result = process_single_user(
+                    user_data,
+                    profile_model, profile_tokenizer,
+                    action_model, action_tokenizer,
+                    semantic_scorer,
+                    workers=workers,
+                    rounds=rounds,
+                )
+                elapsed = time.time() - t0
+                all_results.append(result)
+                processed_user_ids.add(str(result.get("user_id")))
+                pws = _flush_one_user(result, fp_pairs, fp_detail)
+                batch_elapsed = time.time() - run_start
+                if cfg.DEBUG_LLM:
+                    print(f"[Pipeline] 用户 {result['user_id']} 完成，耗时 {elapsed:.1f}s", flush=True)
+                    print(
+                        f"[Pipeline] 用户 {result['user_id']} DPO轮次分布: "
+                        f"{result.get('round_pair_distribution', {})}",
+                        flush=True,
+                    )
+                    print(
+                        f"[Pipeline] 用户 {result['user_id']} DPO 对已增量写入 {pws} 条 "
+                        f"(累计 {total_pairs_written} 条)",
+                        flush=True,
+                    )
+                else:
+                    _print_user_finish_report(
+                        result,
+                        i + 1,
+                        len(pending_users),
+                        elapsed,
+                        batch_elapsed,
+                    )
 
     total_elapsed = time.time() - run_start
     avg_user_elapsed = (total_elapsed / len(pending_users)) if pending_users else 0.0
@@ -716,7 +1016,20 @@ def run_dpo_pipeline(
             "debug_llm_include_actions": getattr(cfg, "DEBUG_LLM_INCLUDE_ACTIONS", False),
             "random_seed": random_seed,
             "workers": workers,
+            "user_processes": n_up,
+            "user_parallel": use_parallel_users,
+            "effective_user_processes": effective_procs,
+            "scorer_device": (
+                sem_parallel
+                if use_parallel_users
+                else (
+                    scorer_device
+                    or getattr(cfg, "DPO_SCORER_DEVICE", None)
+                    or "auto"
+                )
+            ),
             "rounds": rounds,
+            "user_process_stagger_sec": stagger_resolved,
         },
     }
     summary_file = output_path / f"dpo_summary_{stem}.json"
@@ -769,7 +1082,26 @@ if __name__ == "__main__":
         "--workers",
         type=int,
         default=DPO_WORKERS,
-        help="候选画像生成与评分的并发线程数（默认来自 config.DPO_WORKERS）",
+        help="单用户内、候选级并行：线程数（画像与评分，默认 config.DPO_WORKERS）",
+    )
+    parser.add_argument(
+        "--user-processes",
+        type=int,
+        default=DPO_USER_PROCESSES,
+        dest="user_processes",
+        help="多用户时并行进程数；每进程内仍用 --workers 做候选级线程。1=按用户串行。",
+    )
+    parser.add_argument(
+        "--scorer-device",
+        default=None,
+        help="Sentence-Transformer 设备：cpu / cuda 等。多进程默认各子进程 cpu；单进程未指定则自动。",
+    )
+    parser.add_argument(
+        "--user-process-stagger",
+        type=float,
+        default=None,
+        dest="user_process_stagger_sec",
+        help="多用户多进程时第 i 个任务先等待 i×秒 再开始（默认同 config；0=关闭错开）",
     )
     parser.add_argument(
         "--rounds",
@@ -812,12 +1144,15 @@ if __name__ == "__main__":
         run_dpo_pipeline(
             input_files[0],
             args.output_dir,
-            args.max_users,
-            args.seed,
-            args.workers,
-            args.rounds,
+            max_users=args.max_users,
+            random_seed=args.seed,
+            workers=args.workers,
+            user_processes=args.user_processes,
+            rounds=args.rounds,
             do_preflight=True,
             resume=args.resume,
+            scorer_device=args.scorer_device,
+            user_process_stagger_sec=args.user_process_stagger_sec,
         )
     else:
         print(f"[Pipeline] 批量模式: 共 {len(input_files)} 个输入文件", flush=True)
@@ -829,10 +1164,13 @@ if __name__ == "__main__":
             run_dpo_pipeline(
                 fp,
                 args.output_dir,
-                args.max_users,
-                args.seed,
-                args.workers,
-                args.rounds,
+                max_users=args.max_users,
+                random_seed=args.seed,
+                workers=args.workers,
+                user_processes=args.user_processes,
+                rounds=args.rounds,
                 do_preflight=False,
                 resume=args.resume,
+                scorer_device=args.scorer_device,
+                user_process_stagger_sec=args.user_process_stagger_sec,
             )

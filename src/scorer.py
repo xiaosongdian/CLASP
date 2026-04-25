@@ -6,7 +6,7 @@
 - Q(S)：综合对齐得分
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from sklearn.metrics import f1_score
@@ -19,20 +19,31 @@ from src.config import ACTION_WEIGHTS, ALPHA, NORMALIZE_L_TO_UNIT, SENTENCE_TRAN
 class SemanticScorer:
     """基于 sentence-transformers 的语义相似度评分器"""
 
-    def __init__(self, model_path: str = SENTENCE_TRANSFORMER_MODEL):
+    def __init__(
+        self,
+        model_path: str = SENTENCE_TRANSFORMER_MODEL,
+        device: Optional[Union[str, torch.device]] = None,
+    ):
+        """
+        device:
+          - None: 有 CUDA 时用 GPU，否则 CPU（与历史行为一致）
+          - "cpu" / "cuda" / "cuda:0" 等：显式指定，多进程时建议各进程用 cpu 避免多份占满显存
+        """
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         self.model = AutoModel.from_pretrained(model_path)
         self.model.eval()
-        if torch.cuda.is_available():
-            self.model = self.model.cuda()
+        if device is None:
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self._device = torch.device(device)
+        self.model = self.model.to(self._device)
 
     def _encode(self, texts: List[str]) -> np.ndarray:
         """将文本列表编码为归一化向量"""
         inputs = self.tokenizer(
             texts, padding=True, truncation=True, max_length=512, return_tensors="pt"
         )
-        if torch.cuda.is_available():
-            inputs = {k: v.cuda() for k, v in inputs.items()}
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
         with torch.no_grad():
             outputs = self.model(**inputs)
         # Mean pooling

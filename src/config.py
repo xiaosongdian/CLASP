@@ -110,5 +110,12 @@ DEBUG_LLM_INCLUDE_ACTIONS = False
 # 并发参数（DPO 评估与候选画像生成）
 # ============================================================================
 DPO_WORKERS = 10
+# 并行处理的用户进程数：1=串行；多用户时设 2~5 可显著压缩墙钟时间（子进程内仍用 DPO_WORKERS 线程评候选）
+DPO_USER_PROCESSES = 5
+# 多用户多进程时，第 i 个用户任务在子进程内会额外等待 i*秒（0 不等待），把各进程真正开始打 API 的时间错开
+DPO_USER_PROCESS_STAGGER_SEC = 0.3
+# 多进程时 Sentence-Transformer 设备：None 表示多进程时由管道默认用 cpu，单进程为自动 cuda/cpu。
+# 若显存足够且需加速语义分，可设为 "cuda"（多进程会各占一份显存，易 OOM）
+DPO_SCORER_DEVICE = None
 # DPO 滚动轮次（第1轮 S0->候选，选最优作为 S1；第2轮窗口前移继续）
 DPO_ROUNDS = 2

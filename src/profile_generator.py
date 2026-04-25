@@ -8,6 +8,7 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
+import src.config as cfg
 from src.config import (
     COMMERCIAL_PROFILE_RATIO,
     DPO_WORKERS,
@@ -177,11 +178,12 @@ def generate_candidate_profiles(
     n_commercial = int(round(n * effective_ratio))
     n_commercial = max(0, min(n, n_commercial))
     n_base = n - n_commercial
-    print(
-        f"  [ProfileGen] 候选画像来源分配：base={n_base}, commercial={n_commercial} "
-        f"(ratio={effective_ratio}, enabled={ENABLE_COMMERCIAL_PROFILE})",
-        flush=True,
-    )
+    if cfg.DEBUG_LLM:
+        print(
+            f"  [ProfileGen] 候选画像来源分配：base={n_base}, commercial={n_commercial} "
+            f"(ratio={effective_ratio}, enabled={ENABLE_COMMERCIAL_PROFILE})",
+            flush=True,
+        )
 
     debug_focus = {
         "type": "profile_refine",
@@ -192,7 +194,8 @@ def generate_candidate_profiles(
     def _gen_one(i: int) -> tuple[int, str]:
         use_commercial = i >= n_base
         provider = "commercial" if use_commercial else "base"
-        print(f"  [ProfileGen] 生成候选画像 {i+1}/{n} (source={provider}) ...", flush=True)
+        if cfg.DEBUG_LLM:
+            print(f"  [ProfileGen] 生成候选画像 {i+1}/{n} (source={provider}) ...", flush=True)
         if use_commercial:
             profile = _invoke_commercial_profile_llm(
                 SYSTEM_INSTRUCTION_REFINEMENT,
