@@ -47,6 +47,7 @@ from src.action_predictor import (
 from src.profile_generator import (
     generate_candidate_profiles,
     generate_initial_profile,
+    profile_candidate_source,
 )
 from src.scorer import SemanticScorer, evaluate_predictions
 
@@ -228,16 +229,19 @@ def evaluate_profile_on_window(
     action_model,
     action_tokenizer,
     semantic_scorer: SemanticScorer,
+    profile_suffix: Optional[str] = None,
 ) -> Tuple[float, float, float]:
     """
     在单个窗口上评估画像，返回 (F, L, Q)。
     history: 前序窗口动作（作为上下文）
     targets: 目标窗口动作（待预测）
+    profile_suffix: 见 action_predictor.predict_actions_for_window
     """
     predictions = predict_actions_for_window(
         action_model, action_tokenizer,
         profile, history, targets,
         temperature=TEMPERATURE_ACTION,
+        profile_suffix=profile_suffix,
     )
     return evaluate_predictions(predictions, targets, semantic_scorer, ALPHA)
 
@@ -251,9 +255,17 @@ def construct_dpo_pairs(
     candidates: List[str],
     s0_scores: Dict[str, Tuple[float, float, float]],
     candidate_scores: List[Dict[str, Tuple[float, float, float]]],
+    *,
+    baseline_profile_source: str = "base",
+    behavior_discrepancies: str = "",
 ) -> List[Dict]:
     """
     构造 DPO 对。
+
+    每条样本含 chosen/rejected 的 profile_source（base | commercial），
+    以及 baseline_profile_source（首轮 S0 为 base；后续轮为上一轮最佳候选的来源）。
+    behavior_discrepancies：本轮用于精炼的预测-真实行为偏差全文，写入每条样本的 discrepancies，
+    便于后续 SFT / 带条件的 DPO 拼 prompt（与 generate_candidate_profiles 入参一致）。
 
     s0_scores: {"W0": (F,L,Q), "W1": (F,L,Q), "W2": (F,L,Q)}
     candidate_scores: [{"W0": (F,L,Q), ...}, ...]  length = N
@@ -286,10 +298,13 @@ def construct_dpo_pairs(
     positive = [r for r in reward_list if r["r_all"] > TAU_PLUS]
     negative = [r for r in reward_list if r["r_all"] < TAU_MINUS]
 
+    n_cand = len(candidates)
+
     def _build_row(pos: Dict, neg: Dict, rule: str) -> Dict:
         return {
             "chosen": {
                 "profile": pos["profile"],
+                "profile_source": profile_candidate_source(pos["index"], n_cand),
                 "r_all": pos["r_all"],
                 "r_pre": pos["r_pre"],
                 "r_cur": pos["r_cur"],
@@ -298,6 +313,7 @@ def construct_dpo_pairs(
             },
             "rejected": {
                 "profile": neg["profile"],
+                "profile_source": profile_candidate_source(neg["index"], n_cand),
                 "r_all": neg["r_all"],
                 "r_pre": neg["r_pre"],
                 "r_cur": neg["r_cur"],
@@ -305,7 +321,9 @@ def construct_dpo_pairs(
                 "scores": neg["scores"],
             },
             "baseline_profile": s0_profile,
+            "baseline_profile_source": baseline_profile_source,
             "baseline_scores": {w: {"F": s[0], "L": s[1], "Q": s[2]} for w, s in s0_scores.items()},
+            "discrepancies": behavior_discrepancies,
             "margin": pos["r_all"] - neg["r_all"],
             "pair_rule": rule,
         }
@@ -418,6 +436,8 @@ def process_single_user(
     round_summaries: List[Dict[str, Any]] = []
     s0_scores_for_return: Dict[str, Tuple[float, float, float]] = {}
     num_candidates_last_round = 0
+    prev_best_idx: Optional[int] = None
+    prev_n_candidates: Optional[int] = None
 
     for ridx in range(effective_rounds):
         w_pre = windows[window_keys[ridx]]
@@ -577,7 +597,21 @@ def process_single_user(
         candidate_scores_list = [s for s in candidate_scores_list if s is not None]
 
         # DPO pairs for this round
-        round_pairs = construct_dpo_pairs(current_profile, candidates, base_scores, candidate_scores_list)
+        if ridx == 0:
+            baseline_src = "base"
+        else:
+            if prev_best_idx is None or prev_n_candidates is None:
+                baseline_src = "base"
+            else:
+                baseline_src = profile_candidate_source(prev_best_idx, prev_n_candidates)
+        round_pairs = construct_dpo_pairs(
+            current_profile,
+            candidates,
+            base_scores,
+            candidate_scores_list,
+            baseline_profile_source=baseline_src,
+            behavior_discrepancies=discrepancies,
+        )
         for p in round_pairs:
             p["round_idx"] = ridx + 1
             p["window_triplet"] = [window_keys[ridx], window_keys[ridx + 1], window_keys[ridx + 2]]
@@ -614,6 +648,9 @@ def process_single_user(
                 f"[User {uid}] Round {ridx + 1} 选择最佳候选 idx={best_idx + 1} "
                 f"作为 S{ridx + 1} (r_all={best_r_all:+.4f})",
             )
+
+        prev_best_idx = best_idx
+        prev_n_candidates = len(candidates)
 
     round_pair_dist = {f"round_{r['round_idx']}": r["num_dpo_pairs"] for r in round_summaries}
     _dbg_print(f"[User {uid}] 轮次DPO分布: {round_pair_dist}")

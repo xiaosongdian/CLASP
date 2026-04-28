@@ -16,8 +16,6 @@ SYSTEM_INSTRUCTION_PROFILE = (
 FREE_FORM_PROMPT = """
 You will serve as an assistant to help generate a user profile based on the user's social media behavior history to better understand the user's interests and predict their future actions.
 
-I will provide you with the user's behavior history in this format. Your task is to deeply analyze this data and generate a comprehensive user profile in ANY FORMAT that you think best captures the user's characteristics. DO NOT constrain yourself to any predefined template - let the analysis reveal what's important.
-
 USER BEHAVIOR HISTORY ({action_count} records):
 {behavior_data}
 
@@ -26,11 +24,7 @@ Your profile should:
 2. Include any dimensions you discover through analysis - don't limit yourself
 3. Capture the user's unique behavioral signatures that distinguish them from others
 4. Be actionable for predicting: what content they'll engage with, what actions they'll take, what triggers their participation
-5. **Scale the depth and detail of your analysis with the amount of input data** - more data should yield richer, more nuanced insights
-
-Generate the profile in whatever format naturally emerges from your analysis. The goal is maximum predictive power, not compliance with a template.
-
-**Target length: Use the richness of the data to inform your output length. With {action_count} records, provide substantially detailed analysis.**
+5. Scale the depth and detail of your analysis with the amount of input data - more data should yield richer, more nuanced insights
 
 User Profile:
 """

@@ -19,7 +19,10 @@ from src.config import (
     OPENAI_BASE_URL,
     PROFILE_API_BASE,
     PROFILE_API_MODEL,
+    PROFILE_BEHAVIOR_TEXT_MAX_CHARS,
     PROFILE_MODEL,
+    PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS,
+    PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS,
     TEMPERATURE_PROFILE,
     TEST_API_BASE,
     TEST_API_KEY,
@@ -95,6 +98,47 @@ def format_behavior_data(actions: List[Dict]) -> str:
     return "\n".join(format_action(a) for a in actions)
 
 
+def truncate_behavior_plaintext(text: str, max_chars: int) -> str:
+    """
+    控制画像/动作 prompt 长度：超长时保留头尾，避免超过远端 max_context。
+    max_chars <= 0 表示不截断。
+    """
+    mc = int(max_chars)
+    if mc <= 0 or len(text) <= mc:
+        return text
+    reserve = 120
+    head = max(500, (mc - reserve) * 2 // 3)
+    tail = mc - head - reserve
+    if tail < 400:
+        tail = 400
+        head = max(400, mc - tail - reserve)
+    omitted = len(text) - head - tail
+    if omitted <= 0:
+        return text[:mc]
+    return (
+        text[:head]
+        + f"\n\n... [{omitted} characters omitted for context limit] ...\n\n"
+        + text[-tail:]
+    )
+
+
+def profile_candidate_source(candidate_index: int, num_candidates: int) -> str:
+    """
+    与 generate_candidate_profiles 中候选顺序一致：
+    下标 ∈ [0, n_base) 为 base（本地 transformers 或 PROFILE_API / vLLM）；
+    ∈ [n_base, n) 为 commercial（ENABLE_COMMERCIAL_PROFILE 且比例>0 时）。
+    初始画像 S0 仅走 base，见 generate_initial_profile。
+    """
+    n = int(num_candidates)
+    if n <= 0:
+        return "base"
+    effective_ratio = float(COMMERCIAL_PROFILE_RATIO) if ENABLE_COMMERCIAL_PROFILE else 0.0
+    n_commercial = int(round(n * effective_ratio))
+    n_commercial = max(0, min(n, n_commercial))
+    n_base = n - n_commercial
+    return "commercial" if int(candidate_index) >= n_base else "base"
+
+
 def generate_initial_profile(
     model,
     tokenizer,
@@ -105,6 +149,9 @@ def generate_initial_profile(
     使用 W0 窗口动作生成初始用户画像 S0。
     """
     behavior_data = format_behavior_data(actions)
+    behavior_data = truncate_behavior_plaintext(
+        behavior_data, int(PROFILE_BEHAVIOR_TEXT_MAX_CHARS)
+    )
     prompt = FREE_FORM_PROMPT.format(
         action_count=len(actions),
         behavior_data=behavior_data,
@@ -169,9 +216,15 @@ def generate_candidate_profiles(
     if TEST_MODE:
         n = TEST_NUM_CANDIDATES
 
+    old_t = truncate_behavior_plaintext(
+        old_profile, int(PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS)
+    )
+    disc_t = truncate_behavior_plaintext(
+        behavior_discrepancies, int(PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS)
+    )
     refinement_prompt = PROFILE_REFINEMENT_PROMPT.format(
-        old_persona=old_profile,
-        behavior_discrepancies=behavior_discrepancies,
+        old_persona=old_t,
+        behavior_discrepancies=disc_t,
     )
 
     effective_ratio = float(COMMERCIAL_PROFILE_RATIO) if ENABLE_COMMERCIAL_PROFILE else 0.0

@@ -42,11 +42,12 @@ python process_dataset/community_data_splitter.py \
 
 关键模块：
 - `src/config.py`：全局配置（模型路径、窗口参数、评分权重、DPO 阈值）
-- `src/window_splitter.py`：窗口切分器（T=10, W0~W4）
+- `src/window_splitter.py`：窗口切分器（默认 T=10；训练 `NUM_WINDOWS=5` 即 W0~W4；**窗口链评估**可 `--num-windows 6` 得到 W0~W5，对应 S0→W1 … S4→W5）
 - `src/scorer.py`：评分（F(S)、L(S)、Q(S)）
 - `src/action_predictor.py`：动作预测（决策类 + 内容生成类）
 - `src/profile_generator.py`：画像生成与精炼
 - `src/dpo_pipeline.py`：DPO 全流程编排（主入口）
+- `src/recompute_dpo_pairs_jsonl.py`：已生成的 `dpo_pairs_*.jsonl` 仅用 F/L **离线重算** Q、`r_*`、`margin`（改 `ALPHA` / `NORMALIZE_L_TO_UNIT` 后补救；可选 `--filter-valid` 按原阈值筛行）
 
 流程摘要：
 1. 窗口切分（不足 50 条动作的用户跳过）
@@ -182,6 +183,8 @@ src/
 L = L（DPO）+ a·L（SFT）
 a = 0.1 
 
+**`dpo_pairs_*.jsonl` 上启动 TRL 微调**：`python -m src.train_profile_dpo_joint --data output/dpo/train/dpo_pairs_community_0.jsonl --output <保存目录>`。若行内没有 `prompt` 字段，脚本会用与线上一致的 **`baseline_profile` + `discrepancies`**（经 `PROFILE_REFINEMENT_*_MAX_CHARS` 截断）拼成 `SYSTEM_INSTRUCTION_REFINEMENT` + `PROFILE_REFINEMENT_PROMPT`；`chosen` / `rejected` 取各自的 `profile` 文本。默认跳过 `chosen.r_all <= rejected.r_all` 的异常对（`--allow-inverted-pairs` 可关闭）。`DPO_BETA`、`DPO_SFT_LOSS_WEIGHT` 在 `config.py` 中配置（默认 β=0.2、a=0.1）。
+
 
 ### Pipeline 流程
 
@@ -250,7 +253,8 @@ output/
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `WINDOW_SIZE` | 10 | 每窗口动作数 |
-| `NUM_WINDOWS` | 5 | W0~W4 |
+| `NUM_WINDOWS` | 5 | 训练/DPO：W0~W4 |
+| `NUM_WINDOWS_EVAL_CHAIN` | 6 | 评估链：W0~W5；baseline 切分默认 |
 | `NUM_CANDIDATE_PROFILES` | 15 | 每轮精炼候选画像数 |
 | `ALPHA` | 0.4 | Q(S) 中 F(S) 的权重 |
 | `TAU_PLUS` | 0.05 | 正向 DPO 阈值 |
@@ -260,6 +264,11 @@ output/
 | `DEBUG_LLM` | False | True 或 `--debug`：打印 Step3 **偏差全文** + **画像精炼** LLM 块；不打印动作 API 块 |
 | `DEBUG_LLM_INCLUDE_ACTIONS` | False | True 或 `--debug-actions`（需同时 `--debug`）：再打印每次动作预测的 `[LLM-DEBUG]` |
 | `DEBUG_LLM_*` | 见 config | 精炼调试时重点展示行为误差与节选；长输出头尾由 `PROFILE_OUTPUT_*` / `DISCREPANCY_MAX` 等控制 |
+| `PLOT_TRIM_EACH_TAIL` | 0.05 | baseline 链图：按用户 `mean_Q` 去最低/最高各该比例；`0` 表示不去极值；命令行 `--plot-trim-each-tail` 可覆盖 |
+| `PROFILE_BEHAVIOR_TEXT_MAX_CHARS` | 8000 | 画像生成/前缀刷新：行为正文最大字符数，超长头尾截断；`0` 不截 |
+| `ACTION_PROMPT_HISTORY_MAX_CHARS` | 6000 | 窗口链 `profile_suffix`（滑动/全量历史）拼入动作 prompt 的上限 |
+| `PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS` | 3500 | 画像精炼时旧 persona 段上限 |
+| `PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS` | 3500 | 画像精炼时偏差文本段上限 |
 
 ---
 
@@ -491,6 +500,8 @@ src/
 L = L（DPO）+ a·L（SFT）
 a = 0.1 
 
+**`dpo_pairs_*.jsonl` 上启动 TRL 微调**：`python -m src.train_profile_dpo_joint --data output/dpo/train/dpo_pairs_community_0.jsonl --output <保存目录>`。若行内没有 `prompt` 字段，脚本会用与线上一致的 **`baseline_profile` + `discrepancies`**（经 `PROFILE_REFINEMENT_*_MAX_CHARS` 截断）拼成 `SYSTEM_INSTRUCTION_REFINEMENT` + `PROFILE_REFINEMENT_PROMPT`；`chosen` / `rejected` 取各自的 `profile` 文本。默认跳过 `chosen.r_all <= rejected.r_all` 的异常对（`--allow-inverted-pairs` 可关闭）。`DPO_BETA`、`DPO_SFT_LOSS_WEIGHT` 在 `config.py` 中配置（默认 β=0.2、a=0.1）。
+
 
 ### Pipeline 流程
 
@@ -559,7 +570,8 @@ output/
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `WINDOW_SIZE` | 10 | 每窗口动作数 |
-| `NUM_WINDOWS` | 5 | W0~W4 |
+| `NUM_WINDOWS` | 5 | 训练/DPO：W0~W4 |
+| `NUM_WINDOWS_EVAL_CHAIN` | 6 | 评估链：W0~W5；baseline 切分默认 |
 | `NUM_CANDIDATE_PROFILES` | 15 | 每轮精炼候选画像数 |
 | `ALPHA` | 0.4 | Q(S) 中 F(S) 的权重 |
 | `TAU_PLUS` | 0.05 | 正向 DPO 阈值 |
@@ -569,6 +581,11 @@ output/
 | `DEBUG_LLM` | False | True 或 `--debug`：打印 Step3 **偏差全文** + **画像精炼** LLM 块；不打印动作 API 块 |
 | `DEBUG_LLM_INCLUDE_ACTIONS` | False | True 或 `--debug-actions`（需同时 `--debug`）：再打印每次动作预测的 `[LLM-DEBUG]` |
 | `DEBUG_LLM_*` | 见 config | 精炼调试时重点展示行为误差与节选；长输出头尾由 `PROFILE_OUTPUT_*` / `DISCREPANCY_MAX` 等控制 |
+| `PLOT_TRIM_EACH_TAIL` | 0.05 | baseline 链图：按用户 `mean_Q` 去最低/最高各该比例；`0` 表示不去极值；命令行 `--plot-trim-each-tail` 可覆盖 |
+| `PROFILE_BEHAVIOR_TEXT_MAX_CHARS` | 8000 | 画像生成/前缀刷新：行为正文最大字符数，超长头尾截断；`0` 不截 |
+| `ACTION_PROMPT_HISTORY_MAX_CHARS` | 6000 | 窗口链 `profile_suffix`（滑动/全量历史）拼入动作 prompt 的上限 |
+| `PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS` | 3500 | 画像精炼时旧 persona 段上限 |
+| `PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS` | 3500 | 画像精炼时偏差文本段上限 |
 
 ---
 
@@ -789,6 +806,8 @@ src/
 L = L（DPO）+ a·L（SFT）
 a = 0.1 
 
+**`dpo_pairs_*.jsonl` 上启动 TRL 微调**：`python -m src.train_profile_dpo_joint --data output/dpo/train/dpo_pairs_community_0.jsonl --output <保存目录>`。若行内没有 `prompt` 字段，脚本会用与线上一致的 **`baseline_profile` + `discrepancies`**（经 `PROFILE_REFINEMENT_*_MAX_CHARS` 截断）拼成 `SYSTEM_INSTRUCTION_REFINEMENT` + `PROFILE_REFINEMENT_PROMPT`；`chosen` / `rejected` 取各自的 `profile` 文本。默认跳过 `chosen.r_all <= rejected.r_all` 的异常对（`--allow-inverted-pairs` 可关闭）。`DPO_BETA`、`DPO_SFT_LOSS_WEIGHT` 在 `config.py` 中配置（默认 β=0.2、a=0.1）。
+
 
 ### Pipeline 流程
 
@@ -857,7 +876,8 @@ output/
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `WINDOW_SIZE` | 10 | 每窗口动作数 |
-| `NUM_WINDOWS` | 5 | W0~W4 |
+| `NUM_WINDOWS` | 5 | 训练/DPO：W0~W4 |
+| `NUM_WINDOWS_EVAL_CHAIN` | 6 | 评估链：W0~W5；baseline 切分默认 |
 | `NUM_CANDIDATE_PROFILES` | 15 | 每轮精炼候选画像数 |
 | `ALPHA` | 0.4 | Q(S) 中 F(S) 的权重 |
 | `TAU_PLUS` | 0.05 | 正向 DPO 阈值 |
@@ -867,6 +887,11 @@ output/
 | `DEBUG_LLM` | False | True 或 `--debug`：打印 Step3 **偏差全文** + **画像精炼** LLM 块；不打印动作 API 块 |
 | `DEBUG_LLM_INCLUDE_ACTIONS` | False | True 或 `--debug-actions`（需同时 `--debug`）：再打印每次动作预测的 `[LLM-DEBUG]` |
 | `DEBUG_LLM_*` | 见 config | 精炼调试时重点展示行为误差与节选；长输出头尾由 `PROFILE_OUTPUT_*` / `DISCREPANCY_MAX` 等控制 |
+| `PLOT_TRIM_EACH_TAIL` | 0.05 | baseline 链图：按用户 `mean_Q` 去最低/最高各该比例；`0` 表示不去极值；命令行 `--plot-trim-each-tail` 可覆盖 |
+| `PROFILE_BEHAVIOR_TEXT_MAX_CHARS` | 8000 | 画像生成/前缀刷新：行为正文最大字符数，超长头尾截断；`0` 不截 |
+| `ACTION_PROMPT_HISTORY_MAX_CHARS` | 6000 | 窗口链 `profile_suffix`（滑动/全量历史）拼入动作 prompt 的上限 |
+| `PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS` | 3500 | 画像精炼时旧 persona 段上限 |
+| `PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS` | 3500 | 画像精炼时偏差文本段上限 |
 
 ---
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-窗口切分器：将用户动作序列按 WINDOW_SIZE 切分为 NUM_WINDOWS 个窗口
-不足 MIN_ACTIONS 的用户自动跳过
+窗口切分器：将用户动作序列按 window_size 切分为 num_windows 个窗口
+（需 actions 不少于 window_size * num_windows，否则跳过该用户）
 """
 
 import argparse
@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from src.config import WINDOW_SIZE, NUM_WINDOWS, MIN_ACTIONS
+from src.config import NUM_WINDOWS, NUM_WINDOWS_EVAL_CHAIN, WINDOW_SIZE
 
 
 def split_user_into_windows(
@@ -99,15 +99,23 @@ def prepare_windowed_data(
     return summary
 
 
-def batch_prepare(input_dir: str, output_dir: str, split: str = "test") -> None:
+def batch_prepare(
+    input_dir: str,
+    output_dir: str,
+    split: str = "test",
+    *,
+    window_size: int = WINDOW_SIZE,
+    num_windows: Optional[int] = None,
+) -> None:
     """对指定 split 目录下的所有社区文件做窗口切分。"""
+    nw = int(num_windows) if num_windows is not None else int(NUM_WINDOWS)
     in_dir = Path(input_dir) / split
     out_dir = Path(output_dir) / split
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for fp in sorted(in_dir.glob("community_*.jsonl")):
         out_file = out_dir / fp.name
-        prepare_windowed_data(str(fp), str(out_file))
+        prepare_windowed_data(str(fp), str(out_file), window_size, nw)
 
 
 if __name__ == "__main__":
@@ -115,12 +123,39 @@ if __name__ == "__main__":
     parser.add_argument("--input", required=True, help="输入 jsonl 文件或目录")
     parser.add_argument("--output", required=True, help="输出 jsonl 文件或目录")
     parser.add_argument("--split", default=None, help="split 名称（目录模式时使用）")
+    parser.add_argument(
+        "--window-size",
+        type=int,
+        default=WINDOW_SIZE,
+        help=f"每窗动作数（默认 {WINDOW_SIZE}）",
+    )
+    parser.add_argument(
+        "--num-windows",
+        type=int,
+        default=None,
+        help=(
+            "窗口个数；默认与训练一致 config.NUM_WINDOWS。"
+            f"评估链 S0→W1…需 W0..W5 时请设 {NUM_WINDOWS_EVAL_CHAIN}（或显式传参）。"
+        ),
+    )
     args = parser.parse_args()
+
+    nw = args.num_windows
+    if nw is None:
+        nw = NUM_WINDOWS
 
     inp = Path(args.input)
     if inp.is_file():
-        prepare_windowed_data(args.input, args.output)
+        prepare_windowed_data(
+            args.input, args.output, args.window_size, int(nw)
+        )
     elif inp.is_dir() and args.split:
-        batch_prepare(args.input, args.output, args.split)
+        batch_prepare(
+            args.input,
+            args.output,
+            args.split,
+            window_size=args.window_size,
+            num_windows=int(nw),
+        )
     else:
         print("请指定单个 jsonl 文件，或指定目录 + --split 参数")

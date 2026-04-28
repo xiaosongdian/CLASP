@@ -140,9 +140,8 @@ def compute_alignment_score(
     alpha: float = ALPHA,
 ) -> float:
     """
-    综合对齐得分:
-    - 默认: Q(S) = α·F(S) + (1-α)·L(S)
-    - 当 NORMALIZE_L_TO_UNIT=True: 先做 L_norm=(L+1)/2，再计算 Q
+    综合对齐得分 Q(S) = α·F(S) + (1-α)·L'(S)。
+    L' = (L+1)/2 ∈ [0,1] 当 config.NORMALIZE_L_TO_UNIT 为 True；否则 L' = L（原始余弦，约 [-1,1]）。
     """
     if NORMALIZE_L_TO_UNIT:
         l_score = (l_score + 1.0) / 2.0

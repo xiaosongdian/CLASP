@@ -41,6 +41,7 @@ from src.action_predictor import (
 from src.profile_generator import (
     generate_candidate_profiles,
     generate_initial_profile,
+    profile_candidate_source,
 )
 from src.prompts import build_profile_refinement_prompt_messages
 from src.scorer import SemanticScorer, evaluate_predictions
@@ -182,6 +183,8 @@ def construct_dpo_pairs(
     s0_scores: Dict[str, Tuple[float, float, float]],
     candidate_scores: List[Dict[str, Tuple[float, float, float]]],
     prompt_messages: Optional[List[Dict[str, str]]] = None,
+    *,
+    baseline_profile_source: str = "base",
 ) -> List[Dict]:
     """
     构造 DPO 对。
@@ -220,6 +223,7 @@ def construct_dpo_pairs(
     positive = [r for r in reward_list if r["r_all"] > TAU_PLUS]
     negative = [r for r in reward_list if r["r_all"] < TAU_MINUS]
 
+    n_cand = len(candidates)
     dpo_pairs = []
     for pos in positive:
         for neg in negative:
@@ -227,6 +231,7 @@ def construct_dpo_pairs(
                 row = {
                     "chosen": {
                         "profile": pos["profile"],
+                        "profile_source": profile_candidate_source(pos["index"], n_cand),
                         "r_all": pos["r_all"],
                         "r_pre": pos["r_pre"],
                         "r_cur": pos["r_cur"],
@@ -235,6 +240,7 @@ def construct_dpo_pairs(
                     },
                     "rejected": {
                         "profile": neg["profile"],
+                        "profile_source": profile_candidate_source(neg["index"], n_cand),
                         "r_all": neg["r_all"],
                         "r_pre": neg["r_pre"],
                         "r_cur": neg["r_cur"],
@@ -242,6 +248,7 @@ def construct_dpo_pairs(
                         "scores": neg["scores"],
                     },
                     "baseline_profile": s0_profile,
+                    "baseline_profile_source": baseline_profile_source,
                     "baseline_scores": {w: {"F": s[0], "L": s[1], "Q": s[2]} for w, s in s0_scores.items()},
                     "margin": pos["r_all"] - neg["r_all"],
                 }

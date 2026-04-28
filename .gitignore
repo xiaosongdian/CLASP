@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+output/**
+output/dpo/train/dpo_pairs_community_0.jsonl
+output/dpo/train/dpo_detail_community_0.jsonl
+output/windowed/test/community_1.jsonl

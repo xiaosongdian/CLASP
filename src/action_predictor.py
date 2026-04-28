@@ -499,20 +499,24 @@ def predict_actions_for_window(
     max_new_tokens_decision: int = 128,
     max_new_tokens_content: int = 512,
     temperature: float = 0.3,
+    profile_suffix: Optional[str] = None,
 ) -> List[Dict]:
     """
     对目标窗口中每条动作进行预测。
     使用滑动历史：随着预测推进，前面的真实动作加入历史。
 
+    profile_suffix: 可选，拼在画像文本后（如显式近期/全量行为块），供对比实验 S0+历史、全量历史等。
+
     返回预测列表：[{"action_type": str, "content": str|None}, ...]
     """
+    user_profile = (profile + (f"\n\n{profile_suffix}" if (profile_suffix or "").strip() else "")).strip()
     predictions = []
     current_history = list(history_actions)
 
     n = len(target_actions)
     for i, target in enumerate(target_actions):
         # 决策预测
-        inst, inp = build_decision_prompt(profile, current_history[-10:], target)
+        inst, inp = build_decision_prompt(user_profile, current_history[-10:], target)
         raw_decision = invoke_action_llm(
             model,
             tokenizer,
@@ -527,7 +531,7 @@ def predict_actions_for_window(
         # 内容预测（仅 post/reply）
         pred_content = None
         if pred_type in ("post", "reply"):
-            inst_c, inp_c = build_content_prompt(profile, current_history[-10:], target)
+            inst_c, inp_c = build_content_prompt(user_profile, current_history[-10:], target)
             pred_content = invoke_action_llm(
                 model,
                 tokenizer,

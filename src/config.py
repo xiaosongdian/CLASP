@@ -46,8 +46,10 @@ TEST_NUM_CANDIDATES = 3       # 测试时只生成 3 个候选画像（正式 15
 # 窗口参数
 # ============================================================================
 WINDOW_SIZE = 10       # 每个窗口的动作数
-NUM_WINDOWS = 5        # W0 ~ W4
-MIN_ACTIONS = WINDOW_SIZE * NUM_WINDOWS  # 用户至少需要 50 条动作
+NUM_WINDOWS = 5        # 训练 / DPO：W0 ~ W4（共 5 窗）
+# 窗口链评估：W0 建 S0，再 S0→W1 … S4→W5，共 6 窗、6*T 条动作
+NUM_WINDOWS_EVAL_CHAIN = 6
+MIN_ACTIONS = WINDOW_SIZE * NUM_WINDOWS  # 用户至少需要 50 条动作（训练默认）
 
 # ============================================================================
 # 动作预测 / SFT 样本构造
@@ -65,23 +67,38 @@ ACTION_WEIGHTS = {
 }
 
 # 综合得分 Q(S) = ALPHA * F(S) + (1 - ALPHA) * L(S)
-ALPHA = 0.3
-# 是否将语义相似度 L 从 [-1, 1] 归一化到 [0, 1] 后再参与 Q 计算
-NORMALIZE_L_TO_UNIT = True
+# 经验（train_copy community_4）：F 多在 0～0.8、std≈0.16；L 多在 0～0.35、std≈0.09。α=0.7 时 Q 几乎由 F 主导；
+# α≈0.55～0.62 可在不明显牺牲动作项的前提下让文本相似度 L 对 margin 更有存在感。
+ALPHA = 0.58
+# 若为 True：先将 L 从 [-1,1] 线性映射到 [0,1] 再算 Q（Q 可能高于原始 F/L）；False 则直接用原始 L
+# 当前数据里 L 已多为非负余弦相似度，再做 (L+1)/2 会压窄有效动态范围，一般保持 False。
+NORMALIZE_L_TO_UNIT = False
+
+# 作图（baseline 链 F/L/Q）：按用户 mean_Q 去掉最低/最高各该比例后再聚合折线；0=不去极值
+PLOT_TRIM_EACH_TAIL = 0.05
 
 # ============================================================================
 # DPO 对构造阈值
 # ============================================================================
 NUM_CANDIDATE_PROFILES = 10   # 每轮精炼候选画像数
-TAU_PLUS = 0.05               # 正向阈值，有明确的提升
-TAU_MINUS = 0             # 负向阈值
-DELTA = 0.05                  # 正负对之间最小差距
-ABS_DELTA = DELTA*2        # 正负对之间最小差距的绝对值，有绝对的负方向
+# r_all 为三窗 Q 差之和；略抬高 TAU+、负侧略低于 0，可减少「几乎打平」的弱偏好对。
+TAU_PLUS = 0.06               # r_all > TAU+ 视为正例候选
+TAU_MINUS = -0.02             # r_all < TAU- 视为负例候选（原为 0 时任意负即负例，对更严）
+DELTA = 0.05                  # tau_delta：正例与负例 r_all 至少相差 DELTA
+ABS_DELTA = DELTA * 2         # abs_delta 规则下 Hi/Lo 最小 |Δr|
 # ============================================================================
 # 模型推理参数
 # ============================================================================
 MAX_NEW_TOKENS_PROFILE = 2048     # 画像生成最大 token
 MAX_NEW_TOKENS_ACTION = 512       # 动作预测最大 token
+
+# 画像 API 常见 max_context=4096：行为拼接过长会 400。限制送入画像模型的行为正文长度（头尾保留）。
+PROFILE_BEHAVIOR_TEXT_MAX_CHARS = 8000
+# 窗口链里 s0_sliding_history / user_full_history 拼到动作预测「画像」后的额外块上限（为 scenario 等留 token）。
+ACTION_PROMPT_HISTORY_MAX_CHARS = 6000
+# 画像精炼 prompt 两段的字符上限（与 PROFILE_BEHAVIOR_TEXT_MAX_CHARS 分开，避免 old+误差一起爆上下文）
+PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS = 3500
+PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS = 3500
 TEMPERATURE_PROFILE = 0.8         # 画像候选多样性
 TEMPERATURE_ACTION = 0         # 动作预测倾向确定性
 
@@ -119,3 +136,10 @@ DPO_USER_PROCESS_STAGGER_SEC = 0.3
 DPO_SCORER_DEVICE = None
 # DPO 滚动轮次（第1轮 S0->候选，选最优作为 S1；第2轮窗口前移继续）
 DPO_ROUNDS = 2
+
+# ============================================================================
+# DPO 微调（train_profile_dpo_joint.py，TRL sigmoid + SFT）
+# β 与 readme 中「DPO 温度系数」描述一致
+# ============================================================================
+DPO_BETA = 0.2
+DPO_SFT_LOSS_WEIGHT = 0.1
