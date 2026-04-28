@@ -76,6 +76,9 @@ DECISION_INSTRUCTION = (
 DECISION_INPUT_TEMPLATE = """Target user profile:
 {user_profile}
 
+Recent user actions (chronological order; oldest to newest within this block):
+{action_history}
+
 Current scenario:
 {scenario}
 
@@ -92,6 +95,9 @@ CONTENT_INSTRUCTION = (
 
 CONTENT_INPUT_TEMPLATE = """Target user profile:
 {user_profile}
+
+Recent user actions (chronological order; oldest to newest within this block):
+{action_history}
 
 Current scenario:
 {scenario}

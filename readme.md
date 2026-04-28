@@ -15,8 +15,35 @@
 - `process_dataset/`：数据处理脚本
 - `data/`：导出后的训练/测试/评估数据
 - `comparison/`：对比实验相关代码
+- `Action_model_experiment/`：动作模型基座 vs 微调对比（`run_action_model_eval.py`）
 - `scripts/`：辅助脚本
 - `saves/`：模型或中间结果保存目录
+
+## 动作模型评测（Action_model_experiment）
+
+脚本：`Action_model_experiment/run_action_model_eval.py`。默认**只评测一个**动作模型；API 与模型名用 `--action-api-base` / `--action-model`（与 `--baseline-action-*` 别名等价），评分与 `src/scorer.py` 一致。每个用户：前 N 条动作用画像 API 生成画像，再预测后续 M 条。试跑可加 **`--max-users K`**（如 `--max-users 2`）：在 jsonl 中从上到下，只对前 K 个「动作数 ≥ history_len + predict_len」的用户跑评测，`0` 表示不限制。
+
+**避免 4k 上下文 400：** 送入动作模型的「画像」段会按 `src/config.py` 中 `ACTION_PROMPT_PROFILE_MAX_CHARS` 做头尾截断；`src/action_predictor.call_llm_api` 还会按估算 prompt 长度自动收缩 `max_tokens`，避免 `max_tokens > context − input` 报错。**动作预测 user 侧模板**会显式插入 **近期真实动作**（`format_history(..., include_timestamp=False)` → 行内**不含** `[时间]`，以省 token；画像侧 `format_behavior_data` 仍为带时间戳）。见 `DECISION_INPUT_TEMPLATE` / `CONTENT_INPUT_TEMPLATE` 中 `Recent user actions`；条数由 `ACTION_PREDICTION_HISTORY_WINDOW` 与滑动 `current_history` 控制，过长时由 `ACTION_PROMPT_HISTORY_MAX_CHARS` 头尾截断。
+
+**输出文件（单模型，默认）：**
+
+- `eval_detail_<模型名净化>.jsonl`：每行一个用户，含 `scores`（`F`、`L`、`Q`）、`profile_length_chars`（画像 API 返回的全文字符数）、`profile_for_action_prompt_chars`（截断后实际写入动作 prompt 的长度）、仅**生成类**（真实标签为 `post` / `reply`）的 `generation` 数组（`step_index`、`user_content`、`model_content`）。不写入决策类逐步的原始 decision 文本。
+- `eval_summary_<模型名净化>.json`：各用户 F/L/Q 与上述两种画像长度字段，以及 `aggregate` 中的均值（含平均画像长度）。另含 **`social_signals`**：在全部「生成类 post/reply」「条」上，分别汇总**人类**与**模型**正文是否含 emoji、`#`、`@`（任一条正文含≥1 次即计「含信号」）；`presence_ratio` = **含该信号的条数 ÷ 该侧有效条数**（如 10 条里 5 条有 emoji → 0.5），不按字符占比。每条给出 `total_rows`。另含 **`text_length`**：`total_chars`、`mean_chars_per_row`（该侧非空条的正文 `len` 求和后除以条数，即平均字符数）。预测滑动历史见 `ACTION_PREDICTION_HISTORY_WINDOW`（默认 5），可用 `--action-history-window` 覆盖。双模型对比另有 `model_baseline` / `model_finetuned`。实现见 `src/text_social_signals.py`（`regex`）。
+- 可选 `--eval-detail-suffix myrun` 自定义明细/汇总文件名中的标识。
+
+**双模型对比（可选）：** 加 `--compare-baseline-finetuned` 时写**两个**明细 `eval_detail_<基座标识>.jsonl` 与 `eval_detail_<微调标识>.jsonl`，并写 `eval_summary.json`（含 ΔF/ΔL/ΔQ 与画像长度统计）。微调侧：API 用 `--finetuned-action-api-base`、`--finetuned-action-model`；本地 LoRA 用 `--finetuned-action-lora`。
+
+调试动作模型提示词与原始输出：加 `--print-llm-io`（可选 `--print-llm-io-max-chars 0` 表示不截断），会在终端打印每次 decision/content 的 SYSTEM 指令、`user` 侧输入与模型返回（画像 API 单次调用仍见此开关外，需 `DEBUG_LLM` 等另行观察）。
+
+```bash
+python Action_model_experiment/run_action_model_eval.py \
+  --data data/test/community_5.jsonl \
+  --output-dir Action_model_experiment/output \
+  --action-api-base http://127.0.0.1:8002/v1 \
+  --action-model Meta-Llama-3-8B-Instruct-bluesky-sft
+
+# 可加 --max-users 2，只在文件中取前 2 个「动作条数够用」的用户做评测（0=不限）
+```
 
 ## 社区切分与导出
 

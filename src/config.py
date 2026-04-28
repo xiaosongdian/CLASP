@@ -56,6 +56,9 @@ MIN_ACTIONS = WINDOW_SIZE * NUM_WINDOWS  # 用户至少需要 50 条动作（训
 # ============================================================================
 TEXT_LONG = 500        # 文本截断长度
 
+# 动作预测时送入「决策/内容」prompt 的滑动历史：使用当前时刻之前最近 N 条真实动作（滑动推进）
+ACTION_PREDICTION_HISTORY_WINDOW = 5
+
 # ============================================================================
 # 评分权重（交互决策 F1）
 # ============================================================================
@@ -69,7 +72,7 @@ ACTION_WEIGHTS = {
 # 综合得分 Q(S) = ALPHA * F(S) + (1 - ALPHA) * L(S)
 # 经验（train_copy community_4）：F 多在 0～0.8、std≈0.16；L 多在 0～0.35、std≈0.09。α=0.7 时 Q 几乎由 F 主导；
 # α≈0.55～0.62 可在不明显牺牲动作项的前提下让文本相似度 L 对 margin 更有存在感。
-ALPHA = 0.58
+ALPHA = 0.6
 # 若为 True：先将 L 从 [-1,1] 线性映射到 [0,1] 再算 Q（Q 可能高于原始 F/L）；False 则直接用原始 L
 # 当前数据里 L 已多为非负余弦相似度，再做 (L+1)/2 会压窄有效动态范围，一般保持 False。
 NORMALIZE_L_TO_UNIT = False
@@ -92,10 +95,19 @@ ABS_DELTA = DELTA * 2         # abs_delta 规则下 Hi/Lo 最小 |Δr|
 MAX_NEW_TOKENS_PROFILE = 2048     # 画像生成最大 token
 MAX_NEW_TOKENS_ACTION = 512       # 动作预测最大 token
 
+# OpenAI 兼容动作 API（如 vLLM 4096 上下文）：call_llm_api 会按估算输入长度收缩 max_tokens，避免 400
+ACTION_API_MAX_CONTEXT_TOKENS = 4096
+ACTION_API_COMPLETION_SAFETY_MARGIN = 64
+# 估算 prompt token 数：字符数 / CHARS_PER_TOKEN_ESTIMATE（偏保守，略高估输入以免低估剩余窗口）
+ACTION_API_CHARS_PER_TOKEN_ESTIMATE = 3.0
+
 # 画像 API 常见 max_context=4096：行为拼接过长会 400。限制送入画像模型的行为正文长度（头尾保留）。
-PROFILE_BEHAVIOR_TEXT_MAX_CHARS = 8000
+PROFILE_BEHAVIOR_TEXT_MAX_CHARS = 6000
+# 送入「初始画像」模型的行为正文上限（与 PROFILE_BEHAVIOR_TEXT_MAX_CHARS 同步收紧可减少画像请求爆上下文）
 # 窗口链里 s0_sliding_history / user_full_history 拼到动作预测「画像」后的额外块上限（为 scenario 等留 token）。
 ACTION_PROMPT_HISTORY_MAX_CHARS = 6000
+# 动作预测 prompt 里 Target user profile 段上限（画像全文可能极长；与 ACTION_API_MAX_CONTEXT_TOKENS 配套）
+ACTION_PROMPT_PROFILE_MAX_CHARS = 3500
 # 画像精炼 prompt 两段的字符上限（与 PROFILE_BEHAVIOR_TEXT_MAX_CHARS 分开，避免 old+误差一起爆上下文）
 PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS = 3500
 PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS = 3500

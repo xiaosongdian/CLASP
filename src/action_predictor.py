@@ -32,32 +32,54 @@ from src.prompts import (
 # 动作格式化（与 sft_data_generator 保持一致）
 # ============================================================================
 
-def format_action(a: Dict) -> str:
-    """将单条动作格式化为可读字符串，用于构造 history。"""
+def format_action(a: Dict, *, include_timestamp: bool = True) -> str:
+    """
+    将单条动作格式化为可读字符串，用于构造 history。
+
+    include_timestamp=False 时去掉行首 `[时间]`，用于动作预测 prompt 内的「近期行为」块以节省 token；
+    画像生成等仍可默认 True。
+    """
     ts = a.get("timestamp", "")
     action_type = a.get("action_type", "")
     target = a.get("target") or ""
     action_text = a.get("action_text") or ""
+    lead = f"[{ts}] " if include_timestamp else ""
 
     if action_type == "reply":
         orig = target[:TEXT_LONG] if target else ""
         content = action_text[:TEXT_LONG]
         if orig:
-            return f'[{ts}] Reply to original: "{orig}" | reply text: "{content}"'
-        return f'[{ts}] User commented (context unknown): "{content}"'
+            return f'{lead}Reply to original: "{orig}" | reply text: "{content}"'
+        return f'{lead}User commented (context unknown): "{content}"'
     elif action_type == "post":
         content = action_text[:TEXT_LONG]
-        return f'[{ts}] User posted: "{content}"'
+        return f'{lead}User posted: "{content}"'
     elif action_type == "like":
-        return f'[{ts}] User liked: "{target[:TEXT_LONG]}..."'
+        return f'{lead}User liked: "{target[:TEXT_LONG]}..."'
     elif action_type == "repost":
-        return f'[{ts}] User reposted: "{target[:TEXT_LONG]}..."'
+        return f'{lead}User reposted: "{target[:TEXT_LONG]}..."'
     else:
-        return f'[{ts}] User performed {action_type} on: "{target[:TEXT_LONG]}..."'
+        return f'{lead}User performed {action_type} on: "{target[:TEXT_LONG]}..."'
 
 
-def format_history(actions: List[Dict]) -> str:
-    return "\n".join(format_action(a) for a in actions)
+def format_history(actions: List[Dict], *, include_timestamp: bool = True) -> str:
+    return "\n".join(format_action(a, include_timestamp=include_timestamp) for a in actions)
+
+
+def _truncate_action_history_for_prompt(text: str) -> str:
+    """超长历史头尾截断（与画像共用逻辑；运行时懒导入防与 profile_generator 循环引用）。"""
+    mc = int(getattr(cfg, "ACTION_PROMPT_HISTORY_MAX_CHARS", 6000) or 0)
+    from src.profile_generator import truncate_behavior_plaintext
+
+    return truncate_behavior_plaintext(text, mc)
+
+
+def _format_action_history_block(history: List[Dict]) -> str:
+    if not history:
+        return "(No recent actions in this window.)"
+    return _truncate_action_history_for_prompt(
+        format_history(history, include_timestamp=False)
+    )
 
 
 # ============================================================================
@@ -114,10 +136,12 @@ def build_content_scenario(target_action: Dict) -> str:
 def build_decision_prompt(
     user_profile: str, history: List[Dict], target_action: Dict
 ) -> Tuple[str, str]:
-    """返回 (instruction, input_text) 用于决策预测。"""
+    """返回 (instruction, input_text) 用于决策预测。history 为当前步之前的近期真实动作序列（已格式化进 prompt）。"""
     scenario = build_decision_scenario(target_action)
+    action_history = _format_action_history_block(history)
     input_text = DECISION_INPUT_TEMPLATE.format(
         user_profile=user_profile,
+        action_history=action_history,
         scenario=scenario,
         available_actions=AVAILABLE_ACTIONS,
     )
@@ -127,10 +151,12 @@ def build_decision_prompt(
 def build_content_prompt(
     user_profile: str, history: List[Dict], target_action: Dict
 ) -> Tuple[str, str]:
-    """返回 (instruction, input_text) 用于内容预测。"""
+    """返回 (instruction, input_text) 用于内容预测。history 为当前步之前的近期真实动作序列（已格式化进 prompt）。"""
     scenario = build_content_scenario(target_action)
+    action_history = _format_action_history_block(history)
     input_text = CONTENT_INPUT_TEMPLATE.format(
         user_profile=user_profile,
+        action_history=action_history,
         scenario=scenario,
     )
     return CONTENT_INSTRUCTION, input_text
@@ -346,12 +372,23 @@ def call_llm_api(
     model_role: str = "openai_compatible",
     debug_focus: Optional[Dict[str, Any]] = None,
     debug_emit: bool = True,
+    max_context_tokens: Optional[int] = None,
 ) -> str:
     """
     通过 OpenAI 兼容 API 调用模型，返回生成文本。
     适用于 vLLM / 任意 OpenAI 兼容服务。
+
+    max_context_tokens: 远端窗口上限；None 时使用 config.ACTION_API_MAX_CONTEXT_TOKENS。
+    会在请求前用字符粗估 prompt 长度并收缩 max_tokens，避免 「max_tokens 大于 context−input」 的 400。
     """
-    from openai import BadRequestError, OpenAI
+
+    def _estimate_prompt_tokens(instr: str, user: str) -> int:
+        total = len(instr or "") + len(user or "")
+        cpte = float(getattr(cfg, "ACTION_API_CHARS_PER_TOKEN_ESTIMATE", 3.0) or 3.0)
+        cpte = max(1.5, min(cpte, 8.0))
+        return max(1, int(total / cpte))
+
+    from openai import APIError, BadRequestError, OpenAI
 
     def _parse_allowed_max_tokens_from_error(msg: str) -> Optional[int]:
         """
@@ -376,8 +413,24 @@ def call_llm_api(
         # 预留少量安全缓冲，避免边界抖动再次触发 400
         return max(1, max_ctx - input_tokens - 16)
 
+    mc = (
+        max_context_tokens
+        if max_context_tokens is not None
+        else int(getattr(cfg, "ACTION_API_MAX_CONTEXT_TOKENS", 8192))
+    )
+    margin = int(getattr(cfg, "ACTION_API_COMPLETION_SAFETY_MARGIN", 64))
+
     client = OpenAI(base_url=api_base, api_key=api_key)
-    max_tokens_req = max(1, int(max_new_tokens))
+    est_in = _estimate_prompt_tokens(instruction, input_text)
+    allowed_completion = max(1, mc - est_in - margin)
+    wanted = max(1, int(max_new_tokens))
+    max_tokens_req = max(1, min(wanted, allowed_completion))
+    if max_tokens_req < wanted and getattr(cfg, "DEBUG_LLM", False):
+        print(
+            f"[LLM-API] max_tokens 预判收缩: {wanted} -> {max_tokens_req} "
+            f"(est_input≈{est_in}, context={mc}, model={model_name})",
+            flush=True,
+        )
     last_err: Optional[Exception] = None
     for attempt in range(2):
         try:
@@ -391,9 +444,11 @@ def call_llm_api(
                 temperature=temperature if temperature > 0 else 0.01,
             )
             break
-        except BadRequestError as e:
+        except (BadRequestError, APIError) as e:
             last_err = e
             err_msg = str(e)
+            if getattr(e, "body", None) and isinstance(e.body, dict):
+                err_msg = err_msg + " " + str(e.body)
             allowed = _parse_allowed_max_tokens_from_error(err_msg)
             # 仅对“max_tokens 过大”类问题做一次动态缩小重试
             if attempt == 0 and allowed is not None and allowed < max_tokens_req:
@@ -513,10 +568,12 @@ def predict_actions_for_window(
     predictions = []
     current_history = list(history_actions)
 
+    hw = max(1, int(getattr(cfg, "ACTION_PREDICTION_HISTORY_WINDOW", 5)))
     n = len(target_actions)
     for i, target in enumerate(target_actions):
+        recent = current_history[-hw:] if current_history else []
         # 决策预测
-        inst, inp = build_decision_prompt(user_profile, current_history[-10:], target)
+        inst, inp = build_decision_prompt(user_profile, recent, target)
         raw_decision = invoke_action_llm(
             model,
             tokenizer,
@@ -531,7 +588,7 @@ def predict_actions_for_window(
         # 内容预测（仅 post/reply）
         pred_content = None
         if pred_type in ("post", "reply"):
-            inst_c, inp_c = build_content_prompt(user_profile, current_history[-10:], target)
+            inst_c, inp_c = build_content_prompt(user_profile, recent, target)
             pred_content = invoke_action_llm(
                 model,
                 tokenizer,

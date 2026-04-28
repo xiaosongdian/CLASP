@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.jsonl
+
 output/**
 output/dpo/train/dpo_pairs_community_0.jsonl
 output/dpo/train/dpo_detail_community_0.jsonl
