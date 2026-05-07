@@ -14,7 +14,7 @@
 - `src/`：DPO pipeline 核心代码
 - `process_dataset/`：数据处理脚本
 - `data/`：导出后的训练/测试/评估数据
-- `comparison/`：对比实验相关代码
+- `comparison/`：对比实验相关代码（窗口链基线跑 `python -m comparison.run_baseline_comparison`；**clasp_online** 可选写入 `profile_snapshots`，见 `comparison/README.md`）
 - `Action_model_experiment/`：动作模型基座 vs 微调对比（`run_action_model_eval.py`）
 - `scripts/`：辅助脚本
 - `saves/`：模型或中间结果保存目录

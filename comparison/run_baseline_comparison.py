@@ -32,6 +32,14 @@
     --combined-jsonl \\
     --output output/comparison/baseline_chain_test.jsonl \\
     --methods static_s0,prefix_refresh,clasp_online
+
+  # 断点续跑：跳过输出 jsonl 中已成功完成的用户（无 error），追加新结果
+  python -m comparison.run_baseline_comparison --split test --resume \\
+    --skip-window-split --comparison-root output/comparison
+
+  # 动作 prompt 不载入观测历史（消融 profile 后历史块 / Recent user actions）
+  python -m comparison.run_baseline_comparison --methods clasp_online \\
+    --no-action-prompt-observed-history ...
 """
 from __future__ import annotations
 
@@ -42,7 +50,7 @@ import time
 from collections import defaultdict
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -53,6 +61,11 @@ from src.scorer import SemanticScorer
 from src.window_splitter import batch_prepare
 
 from comparison.window_chain_eval import VALID_METHODS, evaluate_user_window_chain
+from comparison.baseline_resume import (
+    load_all_prior_rows,
+    load_completed_keys_per_method,
+    serialize_user_key,
+)
 from comparison.window_chain_plot import (
     aggregate_flq_by_step,
     filter_rows_for_plot_tails,
@@ -128,6 +141,9 @@ def run(
     separate_by_method: bool,
     output_jsonl: Optional[Path],
     output_stem: str,
+    resume: bool = False,
+    record_profile_snapshots: bool = True,
+    action_prompt_include_observed_history: bool = True,
 ) -> None:
     data_dir = data_dir.resolve()
     windowed_root = windowed_root.resolve()
@@ -137,6 +153,13 @@ def run(
         print(
             "[BaselineChain] clasp_online 使用 --always-accept-refinement："
             "每步始终采用新精炼画像（空则保留旧画像），不比 Q。",
+            flush=True,
+        )
+
+    if not action_prompt_include_observed_history:
+        print(
+            "[BaselineChain] --no-action-prompt-observed-history："
+            "动作预测 prompt 不含观测历史（仅画像 + Current scenario）。",
             flush=True,
         )
 
@@ -187,12 +210,16 @@ def run(
             )
             sys.exit(1)
 
-    if not skip_preflight and not preflight_check():
+    if not skip_preflight and not preflight_check(comparison_methods=methods):
         print("[BaselineChain] 预检失败", flush=True)
         sys.exit(1)
 
+    do_parallel = bool(use_parallel and user_processes > 1)
+    if resume and do_parallel:
+        print("[BaselineChain] --resume：并行模式将追加写入并跳过已完成用户。", flush=True)
+
     # 决定是否使用并行化
-    if use_parallel and user_processes > 1:
+    if do_parallel:
         print(f"[BaselineChain] 使用并行模式: {user_processes} 个进程", flush=True)
         from comparison.run_baseline_parallel import run_baseline_comparison_parallel
 
@@ -207,6 +234,11 @@ def run(
             user_process_stagger_sec=user_process_stagger,
             scorer_device=scorer_device or "cpu",
             split=split,
+            resume=resume,
+            refinement_variants=refinement_variants,
+            always_accept_refinement=always_accept_refinement,
+            record_profile_snapshots=record_profile_snapshots,
+            action_prompt_include_observed_history=action_prompt_include_observed_history,
         )
 
         # 并行模式不支持绘图，如果需要绘图，提示用户
@@ -226,9 +258,22 @@ def run(
     profile_model, profile_tokenizer = None, None
     action_model, action_tokenizer = None, None
 
-    all_rows: List[Dict[str, Any]] = []
+    new_rows: List[Dict[str, Any]] = []
+    prior_rows: List[Dict[str, Any]] = []
+    completed_by_m: Dict[str, Set[str]] = {m: set() for m in methods}
     total_lines = 0
     t0 = time.time()
+
+    clasp_profile_snap_dir: Optional[Path] = None
+    if record_profile_snapshots and "clasp_online" in methods:
+        clasp_profile_snap_dir = (
+            comparison_root / "clasp_online" / "profile_snapshots" / output_stem
+        )
+        clasp_profile_snap_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"[BaselineChain] clasp_online 画像快照目录: {clasp_profile_snap_dir}",
+            flush=True,
+        )
 
     if separate_by_method:
         comparison_root.mkdir(parents=True, exist_ok=True)
@@ -248,16 +293,34 @@ def run(
         output_jsonl.parent.mkdir(parents=True, exist_ok=True)
         method_paths = {}
 
+    if resume:
+        completed_by_m = load_completed_keys_per_method(
+            separate_by_method=separate_by_method,
+            methods=methods,
+            method_paths=method_paths,
+            combined_jsonl=output_jsonl if not separate_by_method else None,
+        )
+        prior_rows = load_all_prior_rows(
+            separate_by_method=separate_by_method,
+            methods=methods,
+            method_paths=method_paths,
+            combined_jsonl=output_jsonl if not separate_by_method else None,
+        )
+        stats = {m: len(completed_by_m.get(m) or set()) for m in methods}
+        print(f"[BaselineChain] --resume: 各 method 已成功用户数（将跳过）: {stats}", flush=True)
+
+    write_mode = "a" if resume else "w"
+
     with ExitStack() as stack:
         writers: Dict[str, Any] = {}
         if separate_by_method:
             for m in methods:
                 writers[m] = stack.enter_context(
-                    method_paths[m].open("w", encoding="utf-8")
+                    method_paths[m].open(write_mode, encoding="utf-8")
                 )
         else:
             writers["__all__"] = stack.enter_context(
-                output_jsonl.open("w", encoding="utf-8")
+                output_jsonl.open(write_mode, encoding="utf-8")
             )
 
         for fp_in in files:
@@ -273,7 +336,10 @@ def run(
                     except json.JSONDecodeError:
                         continue
 
+                    ukey = serialize_user_key(user)
                     for method in methods:
+                        if resume and ukey in completed_by_m.get(method, set()):
+                            continue
                         r = evaluate_user_window_chain(
                             user,
                             method,
@@ -285,36 +351,46 @@ def run(
                             refinement_variants=refinement_variants,
                             workers=workers,
                             always_accept_refinement=always_accept_refinement,
+                            profile_snapshot_dir=(
+                                clasp_profile_snap_dir
+                                if method == "clasp_online"
+                                else None
+                            ),
+                            action_prompt_include_observed_history=action_prompt_include_observed_history,
                         )
                         r["source_file"] = fp_in.name
                         r["split"] = split
                         w = writers[method] if separate_by_method else writers["__all__"]
                         w.write(json.dumps(r, ensure_ascii=False) + "\n")
                         w.flush()
-                        all_rows.append(r)
+                        new_rows.append(r)
+                        if not r.get("error"):
+                            completed_by_m.setdefault(method, set()).add(ukey)
 
                     total_lines += 1
                     if total_lines % 10 == 0:
                         print(
-                            f"[BaselineChain] 已处理 {total_lines} 个用户"
-                            f"（每用户 {len(methods)} 条方法结果）…",
+                            f"[BaselineChain] 已扫描 {total_lines} 个输入用户"
+                            f"（本 run 新写入 {len(new_rows)} 行）…",
                             flush=True,
                         )
 
             if max_users is not None and total_lines >= max_users:
                 break
 
+    all_rows = prior_rows + new_rows
+
     dt = time.time() - t0
     if separate_by_method:
         print(
-            f"[BaselineChain] 完成: {total_lines} 用户, {len(all_rows)} 行输出, "
-            f"耗时 {dt:.1f}s；见各 method 目录下 {output_stem}.jsonl",
+            f"[BaselineChain] 完成: 扫描输入用户 {total_lines} 个, 本 run 新写入 {len(new_rows)} 行, "
+            f"汇总共 {len(all_rows)} 行, 耗时 {dt:.1f}s；见各 method 目录下 {output_stem}.jsonl",
             flush=True,
         )
     else:
         print(
-            f"[BaselineChain] 完成: {total_lines} 用户, {len(all_rows)} 行输出, "
-            f"耗时 {dt:.1f}s -> {output_jsonl}",
+            f"[BaselineChain] 完成: 扫描输入用户 {total_lines} 个, 本 run 新写入 {len(new_rows)} 行, "
+            f"汇总共 {len(all_rows)} 行, 耗时 {dt:.1f}s -> {output_jsonl}",
             flush=True,
         )
     _print_aggregate(all_rows)
@@ -507,6 +583,30 @@ def main() -> None:
         action="store_true",
         help="仅 clasp_online：每步精炼后始终采用新画像，不与旧画像比 Q；精炼为空则保留旧画像",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "断点续跑：读取当前输出 jsonl（无 error 的行视为已完成），跳过已有用户，仅追加未完成的方法；"
+            "须与本次 --comparison-root / --output / output_stem 一致。"
+        ),
+    )
+    parser.add_argument(
+        "--no-profile-snapshots",
+        action="store_true",
+        help=(
+            "关闭 clasp_online 专用画像快照（默认在运行列表含 clasp_online 时写入 "
+            "<comparison-root>/clasp_online/profile_snapshots/<output_stem>/）"
+        ),
+    )
+    parser.add_argument(
+        "--no-action-prompt-observed-history",
+        action="store_true",
+        help=(
+            "动作预测 prompt 不载入观测历史：不拼画像后的本窗行为块，"
+            "也不在 Recent user actions 中使用历史滑窗（仍保留 Current scenario 中的待预测动作上下文）"
+        ),
+    )
     args = parser.parse_args()
 
     from src.config import DPO_WORKERS as _DW
@@ -561,6 +661,9 @@ def main() -> None:
         separate_by_method=separate_by_method,
         output_jsonl=out_single,
         output_stem=output_stem,
+        resume=bool(args.resume),
+        record_profile_snapshots=not bool(args.no_profile_snapshots),
+        action_prompt_include_observed_history=not bool(args.no_action_prompt_observed_history),
     )
 
 

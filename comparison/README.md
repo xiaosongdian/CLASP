@@ -12,6 +12,10 @@
 4. **统一历史机制**：所有方法都使用相同的历史输入（profile_suffix），确保公平对比画像更新策略。
 5. **画像更新策略**：`clasp_online` 误差精炼；`prefix_refresh` 前缀全量重算画像；`static_s0` 始终 S0；`incremental_persona` 用上一画像 + 当前窗行为精炼。可选 `--always-accept-refinement`、`--refinement-variants N`（主要对 `clasp_online`）。
 
+### vLLM 模型切换（基线对比）
+
+`comparison/window_chain_eval.evaluate_user_window_chain` 在调用画像/动作 API 前会按方法切换 `cfg` 中的模型名：**`clasp_online`** 使用画像 checkpoint `COMPARISON_CLASP_PROFILE_VLLM_MODEL` 与动作 checkpoint `COMPARISON_CLASP_ACTION_VLLM_MODEL`；**其余三种方法**画像与动作均使用 `COMPARISON_BASELINE_VLLM_MODEL`。常量定义见 [`src/config.py`](../src/config.py)。两端 vLLM 服务注册的 `model` 字段须与这些字符串一致。
+
 ## 入口
 
 ### 窗口链多基线
@@ -39,6 +43,14 @@
 - 每种 method 一个子文件夹：`<comparison-root>/<method>/baseline_chain_<split或输入文件名>.jsonl`。
 - 若需要**旧版单文件**（所有 method 混在一个 jsonl）：加 **`--combined-jsonl`**，并用 **`--output`** 指定完整路径。
 
+- **clasp_online 画像快照**：当 `--methods` 含 `clasp_online` 时，默认将每用户画像全文写入  
+  `<comparison-root>/clasp_online/profile_snapshots/<output_stem>/user_<user_id>_c_<community_id>.jsonl`  
+  （首行 W0 初始画像，随后每链一步一行，含本步预测前后画像文本）。加 **`--no-profile-snapshots`** 可关闭。
+
+- **不带观测历史的动作 prompt**：加 **`--no-action-prompt-observed-history`** 时，动作模型输入不再包含 (1) 拼在画像后的本窗行为块；(2) 「Recent user actions」滑窗；仍保留 **Current scenario**（目标窗口内当前条的上下文）。可与 `src/config.py` 中 **`ACTION_PROMPT_INCLUDE_OBSERVED_HISTORY`** 配合（CLI 会写入每条结果里的 `action_prompt_include_observed_history`）。
+
+- **汇总图（链上 F/L/Q + 三窗口 Δ）**：`python3 -m comparison.plot.visualize_baseline_chain <baseline_chain_*.jsonl> --out viz.png`；加 **`--watch 10`** 每 10 秒重读 jsonl 覆盖保存（跑分过程中刷新）。
+
 评估已跑完、只需作图时（指向对应 method 下的 jsonl）：
 
 `python3 -m comparison.plot_chain_from_jsonl output/comparison/clasp_online/baseline_chain_community_3.jsonl --plot output/comparison/clasp_online/clasp_c3.png`
@@ -63,5 +75,6 @@
 | `comparison/run_baseline_comparison.py` | 窗口链多基线 CLI（支持 `--input-jsonl`、`--plot`） |
 | `comparison/window_chain_plot.py` | 按步聚合 F/L/Q、绑图 |
 | `comparison/plot_chain_from_jsonl.py` | 仅从 JSONL 重画折线（不调模型） |
+| `comparison/plot/visualize_baseline_chain.py` | 链上均值 F/L/Q + 三窗口 Δ 汇总图，`--watch` 刷新 |
 | `comparison/policysim/` | Baseline 之一：策略仿真子包 |
 | `comparison/Clasp/profile_client.py` | 微调画像 API 封装（供需单独指定画像端点时使用） |

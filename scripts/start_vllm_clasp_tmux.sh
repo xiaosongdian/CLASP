@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#
+# Clasp 方案：画像与动作使用不同微调 checkpoint（与 comparison 里 clasp_online 一致）。
+# - 端口 8001：画像 DPO stage2
+# - 端口 8002：动作 bluesky SFT
+#
+# 先启动第一个 vLLM，等 /v1/models 可访问后再启动第二个，避免双进程同时占显存/争资源导致失败。
+#
+# 用法：
+#   ./scripts/start_vllm_clasp_tmux.sh
+#   tmux attach -t vllm_clasp
+#
+# 环境变量（可选）：
+#   VLLM_START_WAIT_MAX_SEC=900   等待第一个服务就绪的最长时间（秒）
+#   VLLM_START_POLL_INTERVAL=5    轮询间隔（秒）
+#   GPU_PROFILE=0 GPU_ACTION=1    双卡时指定 GPU
+#
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# 与 src/config.py 中 COMPARISON_CLASP_* 对齐
+PROFILE_MODEL_PATH="/data/LLM_models/Meta-Llama-3-8B-Instruct-clasp-dpo-stage2"
+ACTION_MODEL_PATH="/data/LLM_models/Meta-Llama-3-8B-Instruct-bluesky-sft"
+SERVED_PROFILE_NAME="Meta-Llama-3-8B-Instruct-clasp-dpo-stage2"
+SERVED_ACTION_NAME="Meta-Llama-3-8B-Instruct-bluesky-sft"
+
+PROFILE_PORT=8001
+ACTION_PORT=8002
+
+GPU_PROFILE="${GPU_PROFILE:-0}"
+GPU_ACTION="${GPU_ACTION:-0}"
+
+WAIT_MAX_SEC="${VLLM_START_WAIT_MAX_SEC:-120}"
+POLL_SEC="${VLLM_START_POLL_INTERVAL:-5}"
+
+SESSION="vllm_clasp"
+
+if ! command -v tmux &>/dev/null; then
+  echo "需要安装 tmux，例如: sudo apt-get install tmux"
+  exit 1
+fi
+
+if ! command -v curl &>/dev/null; then
+  echo "需要 curl 用于检测 vLLM 是否就绪"
+  exit 1
+fi
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  echo "tmux 会话已存在: $SESSION"
+  echo "请先: tmux kill-session -t $SESSION   或   tmux attach -t $SESSION"
+  exit 1
+fi
+
+echo "=========================================="
+echo "vLLM Clasp（画像 DPO + 动作 SFT，顺序启动）"
+echo "  画像: $PROFILE_MODEL_PATH"
+echo "  动作: $ACTION_MODEL_PATH"
+echo "  先 :${PROFILE_PORT}，就绪后再 :${ACTION_PORT}"
+echo "=========================================="
+
+# --- 仅启动第一个模型（窗口 0）---
+tmux new-session -d -s "$SESSION"
+tmux rename-window -t "${SESSION}:0" 'profile_8001'
+tmux send-keys -t "${SESSION}:0" "cd '$ROOT'" C-m
+tmux send-keys -t "${SESSION}:0" "CUDA_VISIBLE_DEVICES=${GPU_PROFILE} python -m vllm.entrypoints.openai.api_server --model '${PROFILE_MODEL_PATH}' --served-model-name '${SERVED_PROFILE_NAME}' --port ${PROFILE_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization 0.3" C-m
+
+echo ""
+echo "[1/2] 已启动画像 vLLM（端口 ${PROFILE_PORT}），等待 API 就绪（最长 ${WAIT_MAX_SEC}s，每 ${POLL_SEC}s 检查）..."
+
+elapsed=0
+ready=0
+while [ "$elapsed" -lt "$WAIT_MAX_SEC" ]; do
+  if code=$(curl -s -S -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PROFILE_PORT}/v1/models" 2>/dev/null) && [ "$code" = "200" ]; then
+    ready=1
+    break
+  fi
+  sleep "$POLL_SEC"
+  elapsed=$((elapsed + POLL_SEC))
+  if [ $((elapsed % 30)) -eq 0 ] || [ "$elapsed" -eq "$POLL_SEC" ]; then
+    echo "  ... 已等待 ${elapsed}s"
+  fi
+done
+
+if [ "$ready" != "1" ]; then
+  echo "[✗] 画像 vLLM 在 ${WAIT_MAX_SEC}s 内未就绪。请 tmux attach -t ${SESSION} 查看窗口 0 日志。"
+  exit 1
+fi
+
+echo "[✓] 画像 vLLM 已就绪（${PROFILE_PORT}/v1/models HTTP 200）"
+
+# --- 再启动第二个模型（新窗口）---
+echo ""
+echo "[2/2] 启动动作 vLLM（端口 ${ACTION_PORT}）..."
+tmux new-window -t "${SESSION}:1" -n 'action_8002'
+tmux send-keys -t "${SESSION}:1" "cd '$ROOT'" C-m
+tmux send-keys -t "${SESSION}:1" "CUDA_VISIBLE_DEVICES=${GPU_ACTION} python -m vllm.entrypoints.openai.api_server --model '${ACTION_MODEL_PATH}' --served-model-name '${SERVED_ACTION_NAME}' --port ${ACTION_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization 0.5" C-m
+
+echo ""
+echo "两个进程均已下发启动命令。"
+echo "  接入: tmux attach -t ${SESSION}"
+echo "  窗口 0: 画像（8001）  窗口 1: 动作（8002）"
+echo "  分离: Ctrl+B 然后按 D"
+echo "  结束: tmux kill-session -t ${SESSION}"
+echo ""

@@ -18,7 +18,6 @@ from src.config import (
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
     PROFILE_API_BASE,
-    PROFILE_API_MODEL,
     PROFILE_BEHAVIOR_TEXT_MAX_CHARS,
     PROFILE_MODEL,
     PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS,
@@ -70,7 +69,7 @@ def _invoke_profile_llm(
     if USE_VLLM_API or model is None or tokenizer is None:
         return call_llm_api(
             PROFILE_API_BASE,
-            PROFILE_API_MODEL,
+            cfg.PROFILE_API_MODEL,
             instruction,
             input_text,
             max_new_tokens,

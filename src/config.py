@@ -29,7 +29,16 @@ OPENAI_BASE_URL = "https://api.huiyan-ai.cn/v1"
 PROFILE_MODEL = "gpt-4o-mini"
 
 ACTION_API_BASE = "http://localhost:8002/v1"
-ACTION_API_MODEL = "Meta-Llama-3-8B-Instruct-bluesky-sft"
+ACTION_API_MODEL = "Meta-Llama-3-8B-Instruct"
+
+# comparison.run_baseline_comparison：按方法切换 vLLM 的 model 字段（须与各自服务端的 served model id 一致，可为本地路径）
+COMPARISON_BASELINE_VLLM_MODEL = "/data/LLM_models/Meta-Llama-3-8B-Instruct/"
+COMPARISON_CLASP_PROFILE_VLLM_MODEL = (
+    "Meta-Llama-3-8B-Instruct-clasp-dpo-stage2"
+)
+COMPARISON_CLASP_ACTION_VLLM_MODEL = (
+    "Meta-Llama-3-8B-Instruct-bluesky-sft"
+)
 
 # ============================================================================
 
@@ -58,6 +67,11 @@ TEXT_LONG = 500        # 文本截断长度
 
 # 动作预测时送入「决策/内容」prompt 的滑动历史：使用当前时刻之前最近 N 条真实动作（滑动推进）
 ACTION_PREDICTION_HISTORY_WINDOW = 5
+
+# True（默认）：prompt 含两类「观测到的历史」——(1) 拼在画像后的 profile_suffix（如窗口链里本窗行为块）；
+# (2) 模板中 Recent user actions 的历史滑窗。False：仅用画像 + Current scenario（待预测动作上下文），
+# 用于消融「历史动作位置/注意力」对判断的影响；对比实验可通过 CLI 覆盖。
+ACTION_PROMPT_INCLUDE_OBSERVED_HISTORY = True
 
 # ============================================================================
 # 评分权重（交互决策 F1）
@@ -112,7 +126,7 @@ ACTION_PROMPT_PROFILE_MAX_CHARS = 3500
 PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS = 3500
 PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS = 3500
 TEMPERATURE_PROFILE = 0.8         # 画像候选多样性
-TEMPERATURE_ACTION = 0         # 动作预测倾向确定性
+TEMPERATURE_ACTION = 0.3         # 动作预测倾向确定性
 
 # ============================================================================
 # Debug：打印每次 LLM 请求/响应（由 --debug 或 DEBUG_LLM=True 开启）

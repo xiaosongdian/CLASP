@@ -16,7 +16,6 @@ from src.config import (
     TEST_API_KEY,
     TEST_API_MODEL,
     ACTION_API_BASE,
-    ACTION_API_MODEL,
 )
 from src.prompts import (
     AVAILABLE_ACTIONS,
@@ -511,7 +510,7 @@ def invoke_action_llm(
     if USE_VLLM_API or model is None or tokenizer is None:
         return call_llm_api(
             ACTION_API_BASE,
-            ACTION_API_MODEL,
+            cfg.ACTION_API_MODEL,
             instruction,
             input_text,
             max_new_tokens,
@@ -557,6 +556,7 @@ def predict_actions_for_window(
     profile_suffix: Optional[str] = None,
     use_parallel: Optional[bool] = None,
     workers: Optional[int] = None,
+    include_observed_history: Optional[bool] = None,
 ) -> List[Dict]:
     """
     对目标窗口中每条动作进行预测。
@@ -570,6 +570,8 @@ def predict_actions_for_window(
     - 串行模式（旧版）：使用滑动历史，动作之间有依赖
 
     profile_suffix: 可选，拼在画像文本后（如显式近期/全量行为块），供对比实验 S0+历史、全量历史等。
+    include_observed_history: False 时不拼 profile_suffix，且 Recent user actions 块为空占位；
+        None 时读 config.ACTION_PROMPT_INCLUDE_OBSERVED_HISTORY。
 
     返回预测列表：[{"action_type": str, "content": str|None}, ...]
     """
@@ -579,6 +581,14 @@ def predict_actions_for_window(
     if workers is None:
         workers = getattr(cfg, "ACTION_PREDICTION_WORKERS", 10)
 
+    _ih = (
+        include_observed_history
+        if include_observed_history is not None
+        else bool(getattr(cfg, "ACTION_PROMPT_INCLUDE_OBSERVED_HISTORY", True))
+    )
+    eff_suffix = profile_suffix if _ih else None
+    eff_history_src = history_actions if _ih else []
+
     # 并行模式：所有动作使用相同的历史窗口
     if use_parallel:
         from src.action_predictor_parallel import predict_actions_for_window_parallel
@@ -586,24 +596,24 @@ def predict_actions_for_window(
             model,
             tokenizer,
             profile,
-            history_actions,
+            eff_history_src,
             target_actions,
             max_new_tokens_decision,
             max_new_tokens_content,
             temperature,
-            profile_suffix,
+            eff_suffix,
             workers,
         )
 
     # 串行模式（旧版）：使用滑动历史
-    user_profile = (profile + (f"\n\n{profile_suffix}" if (profile_suffix or "").strip() else "")).strip()
+    user_profile = (profile + (f"\n\n{eff_suffix}" if (eff_suffix or "").strip() else "")).strip()
     predictions = []
-    current_history = list(history_actions)
+    current_history = list(eff_history_src)
 
     hw = max(1, int(getattr(cfg, "ACTION_PREDICTION_HISTORY_WINDOW", 5)))
     n = len(target_actions)
     for i, target in enumerate(target_actions):
-        recent = current_history[-hw:] if current_history else []
+        recent = current_history[-hw:] if current_history and _ih else []
         # 决策预测
         inst, inp = build_decision_prompt(user_profile, recent, target)
         raw_decision = invoke_action_llm(

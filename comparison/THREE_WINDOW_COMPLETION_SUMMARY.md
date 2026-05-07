@@ -188,7 +188,7 @@ python -c "from comparison.window_chain_eval import VALID_METHODS; print(sorted(
    python -m comparison.run_baseline_comparison \
      --split test \
      --windowed-root output/windowed \
-     --methods clasp_online \
+     --methods static_s0 \
      --comparison-root output/comparison \
      --scorer-device cpu \
      --skip-window-split

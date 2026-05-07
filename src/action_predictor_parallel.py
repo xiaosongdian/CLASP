@@ -95,7 +95,7 @@ def predict_actions_for_window_parallel(
     - 可以并行预测所有动作
 
     Args:
-        history_actions: 历史窗口（W_t）
+        history_actions: 历史窗口（W_t）；若由上层已置空则 prompt 中无 Recent user actions
         target_actions: 目标窗口（W_{t+1}）
         workers: 并行线程数
 
