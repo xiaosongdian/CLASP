@@ -1,0 +1,63 @@
+### Clasp 画像 DPO — 阶段 1：仅 base/base 偏好对
+### 导出：在 Clasp 仓库根目录执行
+###   python scripts/export_clasp_dpo_for_llamafactory.py \
+###     --input output/dpo/train/dpo_pairs_stage1_base_only.jsonl \
+###     --output /home/xiaosong/personality/DEEPER/data/DEEPER_train_data/clasp/profile_dpo_stage1.jsonl
+### 训练：DPO_Train/run_llamafactory_stage1.sh 或 run_llamafactory_two_stage.sh
+
+### Model
+model_name_or_path: /data/LLM_models/Meta-Llama-3-8B-Instruct
+trust_remote_code: true
+
+### Method：DPO + pref_ftx（对 chosen 的 SFT 辅助项）
+stage: dpo
+do_train: true
+finetuning_type: lora
+
+### Dataset
+dataset_dir: /home/xiaosong/personality/DEEPER/data
+dataset: clasp_profile_dpo_stage1
+template: llama3
+cutoff_len: 8192
+overwrite_cache: true
+preprocessing_num_workers: 4
+dataloader_num_workers: 2
+
+### LoRA
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.1
+
+### DPO（对齐 src/config.py）
+pref_beta: 0.2
+pref_ftx: 0.1
+pref_loss: sigmoid
+
+### Train
+output_dir: /home/xiaosong/personality/DEEPER/saves/clasp_profile_dpo_stage1_base
+overwrite_output_dir: true
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8
+learning_rate: 5.0e-6
+num_train_epochs: 4
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+max_grad_norm: 1.0
+bf16: true
+ddp_timeout: 180000000
+optim: adamw_torch
+
+### Eval
+do_eval: true
+eval_strategy: steps
+eval_steps: 100
+val_size: 0.05
+per_device_eval_batch_size: 2
+
+### Logging
+logging_steps: 5
+save_steps: 100
+save_total_limit: 4
+plot_loss: true
+report_to: none

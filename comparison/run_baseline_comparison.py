@@ -6,9 +6,9 @@
   - static_s0：W0 初始画像固定不变；
   - prefix_refresh：每步用已观测前缀 W0..W_{t+1} 重算「初始画像」；
   - clasp_online：每步按预测误差精炼画像；
-  - incremental_persona：S_{t-1} + 当前窗行为（无误差信号）精炼；
-  - s0_sliding_history：固定 S0 + prompt 中附加当前窗行为；
-  - user_full_history：无显式画像，prompt 中附加 W0..W_t 全量行为。
+  - incremental_persona：S_{t-1} + 当前窗行为（无误差信号）精炼。
+
+注意：所有方法已统一历史输入机制（profile_suffix），确保公平对比画像更新策略。
 
 默认每种 method 单独目录（避免混在同一 jsonl）：
   output/comparison/<method>/baseline_chain_<split>.jsonl
@@ -113,6 +113,9 @@ def run(
     skip_window_split: bool,
     refinement_variants: int,
     workers: int,
+    user_processes: int,
+    user_process_stagger: float,
+    use_parallel: bool,
     scorer_device: Optional[str],
     input_jsonl: Optional[Path] = None,
     file_glob: str = "community_*.jsonl",
@@ -187,6 +190,33 @@ def run(
     if not skip_preflight and not preflight_check():
         print("[BaselineChain] 预检失败", flush=True)
         sys.exit(1)
+
+    # 决定是否使用并行化
+    if use_parallel and user_processes > 1:
+        print(f"[BaselineChain] 使用并行模式: {user_processes} 个进程", flush=True)
+        from comparison.run_baseline_parallel import run_baseline_comparison_parallel
+
+        run_baseline_comparison_parallel(
+            input_files=files,
+            methods=methods,
+            output_stem=output_stem,
+            comparison_root=comparison_root,
+            max_users=max_users,
+            workers=workers,
+            user_processes=user_processes,
+            user_process_stagger_sec=user_process_stagger,
+            scorer_device=scorer_device or "cpu",
+            split=split,
+        )
+
+        # 并行模式不支持绘图，如果需要绘图，提示用户
+        if plot_path is not None:
+            print("[BaselineChain] 注意: 并行模式暂不支持绘图，请使用串行模式 (--no-parallel)", flush=True)
+
+        return
+
+    # 串行模式
+    print(f"[BaselineChain] 使用串行模式", flush=True)
 
     sem_dev = scorer_device
     if sem_dev is None or str(sem_dev).strip() == "":
@@ -401,6 +431,23 @@ def main() -> None:
         help="候选画像线程数；默认 config.DPO_WORKERS",
     )
     parser.add_argument(
+        "--user-processes",
+        type=int,
+        default=None,
+        help="并行处理的用户进程数；默认 config.DPO_USER_PROCESSES（多进程加速）",
+    )
+    parser.add_argument(
+        "--user-process-stagger",
+        type=float,
+        default=0.5,
+        help="多进程启动错开时间（秒），减轻 API 洪峰；默认 0.5s",
+    )
+    parser.add_argument(
+        "--no-parallel",
+        action="store_true",
+        help="禁用多进程并行，使用串行模式（调试用）",
+    )
+    parser.add_argument(
         "--scorer-device",
         default="cpu",
         help="SentenceTransformer 语义分设备（默认 cpu，避免与 GPU 上 vLLM 等争显存）；可设 cuda、cuda:0",
@@ -463,6 +510,7 @@ def main() -> None:
     args = parser.parse_args()
 
     from src.config import DPO_WORKERS as _DW
+    from src.config import DPO_USER_PROCESSES as _DUP
     from src.config import PLOT_TRIM_EACH_TAIL as _PLOT_TRIM
 
     methods = _parse_methods(args.methods)
@@ -494,6 +542,9 @@ def main() -> None:
         skip_window_split=args.skip_window_split,
         refinement_variants=int(args.refinement_variants if args.refinement_variants is not None else 1),
         workers=int(args.workers if args.workers is not None else _DW),
+        user_processes=int(args.user_processes if args.user_processes is not None else _DUP),
+        user_process_stagger=float(args.user_process_stagger),
+        use_parallel=(not args.no_parallel),
         scorer_device=args.scorer_device,
         input_jsonl=args.input_jsonl,
         file_glob=args.file_glob,

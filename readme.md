@@ -75,6 +75,24 @@ python process_dataset/community_data_splitter.py \
 - `src/profile_generator.py`：画像生成与精炼
 - `src/dpo_pipeline.py`：DPO 全流程编排（主入口）
 - `src/recompute_dpo_pairs_jsonl.py`：已生成的 `dpo_pairs_*.jsonl` 仅用 F/L **离线重算** Q、`r_*`、`margin`（改 `ALPHA` / `NORMALIZE_L_TO_UNIT` 后补救；可选 `--filter-valid` 按原阈值筛行）
+- `scripts/merge_dpo_train_pairs.py`：将目录下各社区的 `dpo_pairs_community_*.jsonl` **合并**为全量 `jsonl`，并按 **两阶段 DPO** 切分（互斥，并集为全量）：
+  - **阶段 1**（`--stage1-base`）：双侧 `profile_source` 均为 `base`，先在该集上 DPO 得到 base 课程后的模型。
+  - **阶段 2**（`--stage2-commercial`）：至少一侧为 `commercial`，在阶段 1 模型上继续 DPO。可选 `--legacy-base-only` 再写一份与阶段 1 相同内容的路径（兼容旧文件名）。
+
+多社区合并与两阶段切分示例：
+
+```bash
+python scripts/merge_dpo_train_pairs.py \
+  --input-dir output/dpo/train \
+  --merged output/dpo/train/dpo_pairs_merged_all.jsonl \
+  --stage1-base output/dpo/train/dpo_pairs_stage1_base_only.jsonl \
+  --stage2-commercial output/dpo/train/dpo_pairs_stage2_commercial_involved.jsonl \
+  --legacy-base-only output/dpo/train/dpo_pairs_merged_base_only.jsonl
+```
+
+**使用 LLaMA-Factory 做两阶段 DPO（DPO + `pref_ftx` 混合 chosen 的 SFT 损失）**：用 `scripts/export_clasp_dpo_for_llamafactory.py` 将阶段 `jsonl` 转为 `~/personality/DEEPER/data/DEEPER_train_data/clasp/profile_dpo_stage*.jsonl`。训练入口统一放在 **`DPO_Train/`**：`run_llamafactory_two_stage.sh`（导出+两阶段训练）、`run_llamafactory_stage1.sh` / `run_llamafactory_stage2.sh`、`export_llamafactory_data.sh`；对应 YAML 在 `DPO_Train/config/`。TRL 单机脚本可用 `DPO_Train/run_trl_profile_dpo_joint.sh`（调用同目录 `train_profile_dpo_joint.py`）。
+
+**阶段 2 断点续训**：`clasp_profile_dpo_stage2_llama3_lora.yaml` 中需 `overwrite_output_dir: false`，以便 LLaMA-Factory 从 `output_dir` 下自动恢复最新 `checkpoint-*`。执行 `bash DPO_Train/run_llamafactory_stage2.sh` 时设置 `CLASP_STAGE2_RESUME=1`（选用阶段 2 目录下最新 checkpoint 作为 `adapter_name_or_path`），或手动 `HANDOFF_CKPT=/path/to/checkpoint-900`。跑 `run_llamafactory_two_stage.sh` 时同样可设 `CLASP_STAGE2_RESUME=1`。
 
 流程摘要：
 1. 窗口切分（不足 50 条动作的用户跳过）

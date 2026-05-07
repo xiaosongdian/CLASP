@@ -1,0 +1,12 @@
+### 将阶段 1 DPO LoRA 与基座合并为完整权重（导出到 /data/LLM_models 下新目录）
+### 用法：cd $LF_ROOT && llamafactory-cli export /path/to/本文件
+
+model_name_or_path: /data/LLM_models/Meta-Llama-3-8B-Instruct
+adapter_name_or_path: /home/xiaosong/personality/DEEPER/saves/clasp_profile_dpo_stage1_base
+template: llama3
+trust_remote_code: true
+
+export_dir: /data/LLM_models/Meta-Llama-3-8B-Instruct-clasp-dpo-stage1
+export_size: 5
+export_device: auto
+export_legacy_format: false

@@ -9,7 +9,8 @@
 1. 用 **W0** 上的行为生成**基础画像 S0**。
 2. 测试集窗口化推荐 **6 个窗口**（W0…W5，每窗 T 条动作，共 6T）：`python3 -m src.window_splitter --input data --output output/windowed --split test --num-windows 6`。
 3. **前向链**（无「空历史预测 W0」步）：`step_index=0…4` 依次为 **S0→W1**（历史 W0）、**S1→W2**（历史 W1）…直至 **S4→W5**；每步在「历史 = `W_t`、目标 = `W_{t+1}`」上算 F/L/Q。
-4. **画像 / 上下文更新**：`clasp_online` 误差精炼；`prefix_refresh` 前缀全量重算画像；`static_s0` 始终 S0；`incremental_persona` 用上一画像 + 当前窗行为精炼；`s0_sliding_history` 固定 S0 但在动作 prompt 中附加当前窗行为；`user_full_history` 不显式画像、仅用 W0…W_t 拼接行为块。可选 `--always-accept-refinement`、`--refinement-variants N`（主要对 `clasp_online`）。
+4. **统一历史机制**：所有方法都使用相同的历史输入（profile_suffix），确保公平对比画像更新策略。
+5. **画像更新策略**：`clasp_online` 误差精炼；`prefix_refresh` 前缀全量重算画像；`static_s0` 始终 S0；`incremental_persona` 用上一画像 + 当前窗行为精炼。可选 `--always-accept-refinement`、`--refinement-variants N`（主要对 `clasp_online`）。
 
 ## 入口
 
@@ -17,14 +18,14 @@
 
 `python3 -m comparison.run_baseline_comparison --split test`
 
-- **clasp_online**：上述「误差驱动更新画像」的 Clasp 测试流程。
-- **static_s0**：仅用 W0 的 S0，逐步以 W_t 为历史预测 W_{t+1}（画像不变）。
+**核心 4 种方法**（已统一历史输入机制）：
+
+- **clasp_online**：误差驱动更新画像（主方法）。
+- **static_s0**：仅用 W0 的 S0，画像不变（基线）。
 - **prefix_refresh**：每步后按已观测 W0…W_{t+1} 整段重算「初始画像」。
 - **incremental_persona**：每步后用 S_{t-1} 与**当前窗**真实行为（无预测误差文本）走精炼 prompt，单次更新画像。
-- **s0_sliding_history**：画像固定为 W0 的 S0；每步在 prompt 中附加的是**已观测历史窗 W_t** 的行为全文，**不包含**待预测的 W_{t+1}（无标签泄漏）。
-- **user_full_history**：不设独立画像字符串；每步在 prompt 中附加 **W0 至当前窗** 拼接后的全量行为。
 
-可选：`--methods clasp_online,static_s0,incremental_persona` 等（完整列表见 CLI `--help`）、`--max-users 20`、`--skip-window-split`、`--windowed-root output/windowed`。**自动切分**时默认 `--num-windows` 与 `config.NUM_WINDOWS_EVAL_CHAIN`（6）一致；训练/DPO 仍为 5 窗时可单独跑 splitter。
+可选：`--methods clasp_online,static_s0,prefix_refresh,incremental_persona` 等（完整列表见 CLI `--help`）、`--max-users 20`、`--skip-window-split`、`--windowed-root output/windowed`。**自动切分**时默认 `--num-windows` 与 `config.NUM_WINDOWS_EVAL_CHAIN`（6）一致；训练/DPO 仍为 5 窗时可单独跑 splitter。
 
 - **语义分（SentenceTransformer）**：默认 **`--scorer-device cpu`**，避免与 GPU 上 vLLM 等争显存；显存充裕时可 `--scorer-device cuda` 加速。
 

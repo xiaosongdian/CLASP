@@ -555,15 +555,47 @@ def predict_actions_for_window(
     max_new_tokens_content: int = 512,
     temperature: float = 0.3,
     profile_suffix: Optional[str] = None,
+    use_parallel: Optional[bool] = None,
+    workers: Optional[int] = None,
 ) -> List[Dict]:
     """
     对目标窗口中每条动作进行预测。
-    使用滑动历史：随着预测推进，前面的真实动作加入历史。
+
+    Args:
+        use_parallel: 是否使用并行预测（默认从 config.ACTION_PREDICTION_PARALLEL 读取）
+        workers: 并行线程数（默认从 config.ACTION_PREDICTION_WORKERS 读取）
+
+    注意：
+    - 并行模式：所有动作使用相同的 history_actions，可以并行预测
+    - 串行模式（旧版）：使用滑动历史，动作之间有依赖
 
     profile_suffix: 可选，拼在画像文本后（如显式近期/全量行为块），供对比实验 S0+历史、全量历史等。
 
     返回预测列表：[{"action_type": str, "content": str|None}, ...]
     """
+    # 从配置读取默认值
+    if use_parallel is None:
+        use_parallel = getattr(cfg, "ACTION_PREDICTION_PARALLEL", True)
+    if workers is None:
+        workers = getattr(cfg, "ACTION_PREDICTION_WORKERS", 10)
+
+    # 并行模式：所有动作使用相同的历史窗口
+    if use_parallel:
+        from src.action_predictor_parallel import predict_actions_for_window_parallel
+        return predict_actions_for_window_parallel(
+            model,
+            tokenizer,
+            profile,
+            history_actions,
+            target_actions,
+            max_new_tokens_decision,
+            max_new_tokens_content,
+            temperature,
+            profile_suffix,
+            workers,
+        )
+
+    # 串行模式（旧版）：使用滑动历史
     user_profile = (profile + (f"\n\n{profile_suffix}" if (profile_suffix or "").strip() else "")).strip()
     predictions = []
     current_history = list(history_actions)

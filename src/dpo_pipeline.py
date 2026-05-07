@@ -685,25 +685,37 @@ def _dpo_user_worker(
     job: (下标, user_data, workers, rounds, semantic_scorer_device, stagger_sec)
     stagger_sec: 第 i 个用户先 sleep i*stagger_sec 再加载模型/调 API，减轻多进程同时洪峰；0 表示不等待。
     返回: (下标, result_dict, 处理耗时秒，不含错开等待)
+
+    注意：底层 LLM/SDK 异常（如 openai.APIConnectionError）在多进程中被 pickle 回主进程时，
+    常因异常的 __reduce__/__init__ 与库版本不匹配而抛出 TypeError，掩盖真实故障。
+    此处统一转成 RuntimeError，保证主进程能收到可读错误并保持稳定退出。
     """
     idx, user_data, workers, rounds, sem_device, stagger_sec = job
+    uid = user_data.get("user_id", "?")
+    cid = user_data.get("community_id", "?")
+    ctx = f"[user_id={uid}, community_id={cid}]"
     if stagger_sec > 0.0 and idx > 0:
         time.sleep(float(idx) * float(stagger_sec))
     t0 = time.time()
-    semantic_scorer = SemanticScorer(device=sem_device)
-    profile_model, profile_tokenizer = None, None
-    action_model, action_tokenizer = None, None
-    result = process_single_user(
-        user_data,
-        profile_model,
-        profile_tokenizer,
-        action_model,
-        action_tokenizer,
-        semantic_scorer,
-        workers=workers,
-        rounds=rounds,
-    )
-    return idx, result, time.time() - t0
+    try:
+        semantic_scorer = SemanticScorer(device=sem_device)
+        profile_model, profile_tokenizer = None, None
+        action_model, action_tokenizer = None, None
+        result = process_single_user(
+            user_data,
+            profile_model,
+            profile_tokenizer,
+            action_model,
+            action_tokenizer,
+            semantic_scorer,
+            workers=workers,
+            rounds=rounds,
+        )
+        return idx, result, time.time() - t0
+    except Exception as e:
+        raise RuntimeError(
+            f"DPO 子进程 {ctx} 失败 ({type(e).__name__}): {e}",
+        ) from None
 
 
 def _scorer_device_for_parallel_runs(

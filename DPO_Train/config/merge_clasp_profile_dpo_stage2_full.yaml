@@ -1,0 +1,11 @@
+### 将阶段 2 DPO LoRA（已在阶段 1 适配器上继续训练）与同一基座合并为完整权重
+
+model_name_or_path: /data/LLM_models/Meta-Llama-3-8B-Instruct
+adapter_name_or_path: /home/xiaosong/personality/DEEPER/saves/clasp_profile_dpo_stage2_commercial
+template: llama3
+trust_remote_code: true
+
+export_dir: /data/LLM_models/Meta-Llama-3-8B-Instruct-clasp-dpo-stage2
+export_size: 5
+export_device: auto
+export_legacy_format: false

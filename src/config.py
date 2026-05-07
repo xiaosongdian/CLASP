@@ -17,7 +17,7 @@ SENTENCE_TRANSFORMER_MODEL = "/data/LLM_models/sentence-transformers/all-mpnet-b
 # ============================================================================
 USE_VLLM_API = True
 
-PROFILE_API_BASE = "http://175.6.27.230:8001/v1"
+PROFILE_API_BASE = "http://localhost:8001/v1"
 PROFILE_API_MODEL = "Meta-Llama-3-8B-Instruct"
 
 # 商用画像模型（候选画像混合生成）
@@ -148,6 +148,10 @@ DPO_USER_PROCESS_STAGGER_SEC = 0.3
 DPO_SCORER_DEVICE = None
 # DPO 滚动轮次（第1轮 S0->候选，选最优作为 S1；第2轮窗口前移继续）
 DPO_ROUNDS = 2
+
+# 动作预测并行化
+ACTION_PREDICTION_PARALLEL = True  # 是否并行预测窗口内的动作（默认 True）
+ACTION_PREDICTION_WORKERS = 10     # 动作预测并行线程数（默认 10）
 
 # ============================================================================
 # DPO 微调（train_profile_dpo_joint.py，TRL sigmoid + SFT）

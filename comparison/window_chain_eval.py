@@ -34,14 +34,159 @@ from src.profile_generator import (
 )
 from src.scorer import SemanticScorer, evaluate_predictions
 
+
+def evaluate_three_windows(
+    old_profile: str,
+    new_profile: str,
+    windows: Dict[str, Any],
+    keys: List[str],
+    step_idx: int,
+    action_model,
+    action_tokenizer,
+    semantic_scorer: SemanticScorer,
+) -> Dict[str, Any]:
+    """
+    在三个窗口上评估旧画像和新画像的性能。
+
+    Args:
+        old_profile: 更新前的画像
+        new_profile: 更新后的画像
+        windows: 所有窗口数据
+        keys: 窗口键列表（如 ['W0', 'W1', 'W2', 'W3', 'W4', 'W5']）
+        step_idx: 当前步骤索引
+        action_model: 动作预测模型
+        action_tokenizer: 动作预测分词器
+        semantic_scorer: 语义评分器
+
+    Returns:
+        包含三个窗口评估结果的字典
+    """
+    result = {}
+
+    # 过去窗口：step_idx - 1（如果存在）
+    if step_idx > 0:
+        # 过去窗口：用 W_{i-2} 预测 W_{i-1}
+        # history = W_{i-2}, target = W_{i-1}
+        if step_idx > 1:
+            past_history = windows[keys[step_idx - 2]]
+        else:
+            past_history = []
+        past_target = windows[keys[step_idx - 1]]
+
+        # 用旧画像评估
+        f_old, l_old, q_old = evaluate_profile_on_window(
+            old_profile,
+            past_history,
+            past_target,
+            action_model,
+            action_tokenizer,
+            semantic_scorer,
+            profile_suffix=None,
+        )
+
+        # 用新画像评估
+        f_new, l_new, q_new = evaluate_profile_on_window(
+            new_profile,
+            past_history,
+            past_target,
+            action_model,
+            action_tokenizer,
+            semantic_scorer,
+            profile_suffix=None,
+        )
+
+        result["past_window"] = {
+            "history": keys[step_idx - 2] if step_idx > 1 else "empty",
+            "target": keys[step_idx - 1],
+            "with_old_profile": {"F": f_old, "L": l_old, "Q": q_old},
+            "with_new_profile": {"F": f_new, "L": l_new, "Q": q_new},
+            "gain": {"ΔF": f_new - f_old, "ΔL": l_new - l_old, "ΔQ": q_new - q_old},
+        }
+
+    # 当前窗口：step_idx
+    # 用 W_{i-1} 预测 W_i
+    # history = W_{i-1}, target = W_i
+    if step_idx > 0:
+        current_history = windows[keys[step_idx - 1]]
+    else:
+        current_history = []
+    current_target = windows[keys[step_idx]]
+
+    # 用旧画像评估
+    f_old, l_old, q_old = evaluate_profile_on_window(
+        old_profile,
+        current_history,
+        current_target,
+        action_model,
+        action_tokenizer,
+        semantic_scorer,
+        profile_suffix=None,
+    )
+
+    # 用新画像评估
+    f_new, l_new, q_new = evaluate_profile_on_window(
+        new_profile,
+        current_history,
+        current_target,
+        action_model,
+        action_tokenizer,
+        semantic_scorer,
+        profile_suffix=None,
+    )
+
+    result["current_window"] = {
+        "history": keys[step_idx - 1] if step_idx > 0 else "empty",
+        "target": keys[step_idx],
+        "with_old_profile": {"F": f_old, "L": l_old, "Q": q_old},
+        "with_new_profile": {"F": f_new, "L": l_new, "Q": q_new},
+        "gain": {"ΔF": f_new - f_old, "ΔL": l_new - l_old, "ΔQ": q_new - q_old},
+    }
+
+    # 未来窗口：step_idx + 1（如果存在）
+    if step_idx + 1 < len(keys):
+        # 用 W_i 预测 W_{i+1}
+        # history = W_i, target = W_{i+1}
+        future_history = windows[keys[step_idx]]
+        future_target = windows[keys[step_idx + 1]]
+
+        # 用旧画像评估
+        f_old, l_old, q_old = evaluate_profile_on_window(
+            old_profile,
+            future_history,
+            future_target,
+            action_model,
+            action_tokenizer,
+            semantic_scorer,
+            profile_suffix=None,
+        )
+
+        # 用新画像评估
+        f_new, l_new, q_new = evaluate_profile_on_window(
+            new_profile,
+            future_history,
+            future_target,
+            action_model,
+            action_tokenizer,
+            semantic_scorer,
+            profile_suffix=None,
+        )
+
+        result["future_window"] = {
+            "history": keys[step_idx],
+            "target": keys[step_idx + 1],
+            "with_old_profile": {"F": f_old, "L": l_old, "Q": q_old},
+            "with_new_profile": {"F": f_new, "L": l_new, "Q": q_new},
+            "gain": {"ΔF": f_new - f_old, "ΔL": l_new - l_old, "ΔQ": q_new - q_old},
+        }
+
+    return result
+
 VALID_METHODS = frozenset(
     {
         "static_s0",
         "prefix_refresh",
         "clasp_online",
         "incremental_persona",
-        "s0_sliding_history",
-        "user_full_history",
     }
 )
 
@@ -97,8 +242,8 @@ def evaluate_user_window_chain(
       - clasp_online: 每步按误差精炼画像；默认 refinement_variants=1。
         默认与旧画像比 Q 取优；always_accept_refinement=True 时总是采用新精炼（多份时取首个非空）。
       - incremental_persona: 每步后用 S_{t-1} 与当前窗行为（无误差信号）单次精炼更新画像。
-      - s0_sliding_history: 画像固定 S0；每步在动作 prompt 中附加**已观测历史窗 W_t** 的行为全文（不含待预测的 W_{t+1}）。
-      - user_full_history: 不显式维护画像；每步在 prompt 中附加 **W0..W_t** 拼接行为（不含目标窗）。
+
+    注意：所有方法都使用统一的历史输入机制（profile_suffix），确保公平对比。
     """
     uid = user_record.get("user_id")
     cid = user_record.get("community_id")
@@ -136,31 +281,22 @@ def evaluate_user_window_chain(
         targets = windows[keys[step_idx + 1]]
         wkey = keys[step_idx]
 
-        profile_suffix: Optional[str] = None
-        eval_profile = profile
-        if method == "s0_sliding_history":
-            eval_profile = s0_fixed
-            # 仅附加「当前历史窗」W_t 的行为全文，不含目标窗 W_{t+1}（避免标签泄漏）。
-            profile_suffix = (
-                f"### Explicit recent behaviors (observed window {wkey}, not the prediction target)\n"
-                + format_behavior_data(hist)
-            )
-        elif method == "user_full_history":
-            eval_profile = (
-                "No separate long-term persona. Infer user preferences and likely actions "
-                "only from the cumulative behavior log below."
-            )
-            # W0..W_t 闭区间，即截至已观测最后一窗；不含 W_{t+1}。
-            cum_actions = _concat_windows(windows, keys, 0, step_idx)
-            profile_suffix = (
-                "### Cumulative user behavior (W0 through observed window only)\n"
-                + format_behavior_data(cum_actions)
-            )
+        # === 统一历史机制：所有方法都使用相同的 profile_suffix ===
+        profile_suffix = (
+            f"### Recent behaviors (observed window {wkey})\n"
+            + format_behavior_data(hist)
+        )
 
         if profile_suffix and int(ACTION_PROMPT_HISTORY_MAX_CHARS) > 0:
             profile_suffix = truncate_behavior_plaintext(
                 profile_suffix, int(ACTION_PROMPT_HISTORY_MAX_CHARS)
             )
+
+        # 根据方法设置画像
+        if method == "static_s0":
+            eval_profile = s0_fixed
+        else:
+            eval_profile = profile
 
         # clasp_online：本步只预测一次，评分与 discrepancy 共用同一组 preds（避免重复打动作 API）
         preds_for_refine: Optional[List[Dict]] = None
@@ -172,7 +308,7 @@ def evaluate_user_window_chain(
                 hist,
                 targets,
                 temperature=TEMPERATURE_ACTION,
-                profile_suffix=None,
+                profile_suffix=profile_suffix,
             )
             f_s, l_s, q_s = evaluate_predictions(
                 preds_for_refine, targets, semantic_scorer, ALPHA
@@ -202,17 +338,21 @@ def evaluate_user_window_chain(
         if is_last:
             break
 
-        if method in ("static_s0", "s0_sliding_history", "user_full_history"):
-            continue
+        # 保存旧画像用于三窗口对比
+        old_profile = profile
 
-        if method == "prefix_refresh":
+        if method == "static_s0":
+            # static_s0: 画像不变，但仍然记录三窗口统计（用于对比）
+            # 旧画像和新画像相同
+            pass
+
+        elif method == "prefix_refresh":
             prefix_actions = _concat_windows(windows, keys, 0, step_idx + 1)
             profile = generate_initial_profile(
                 profile_model, profile_tokenizer, prefix_actions
             )
-            continue
 
-        if method == "incremental_persona":
+        elif method == "incremental_persona":
             block = _incremental_refine_block(hist, wkey)
             candidates = generate_candidate_profiles(
                 profile_model,
@@ -224,9 +364,8 @@ def evaluate_user_window_chain(
             )
             if candidates and (candidates[0] or "").strip():
                 profile = candidates[0]
-            continue
 
-        if method == "clasp_online":
+        elif method == "clasp_online":
             discrepancies = build_behavior_discrepancies(
                 preds_for_refine, targets, hist
             )
@@ -239,32 +378,94 @@ def evaluate_user_window_chain(
                 n=n_var,
                 workers=min(workers, n_var),
             )
+
+            # 记录候选画像信息
+            candidate_scores = []
+
             if always_accept_refinement:
                 new_p = profile
-                for cand in candidates:
+                for idx, cand in enumerate(candidates):
                     if (cand or "").strip():
                         new_p = cand
+                        steps_out[-1]["best_candidate_index"] = idx
                         break
                 profile = new_p
+                steps_out[-1]["profile_updated"] = (new_p != old_profile)
             else:
                 best_profile = profile
                 best_q = q_s
-                for cand in candidates:
+                best_idx = -1
+
+                # 使用下一步窗口评估候选画像，避免在训练集（当前窗口）上过拟合
+                # 下一步：hist = W_{t+1}（当前 targets），target = W_{t+2}
+                next_hist = targets
+                next_targets = windows[keys[step_idx + 2]]
+                next_suffix = f"### Recent behaviors (observed window {keys[step_idx + 1]})\n" + format_behavior_data(next_hist)
+                if next_suffix and int(ACTION_PROMPT_HISTORY_MAX_CHARS) > 0:
+                    next_suffix = truncate_behavior_plaintext(next_suffix, int(ACTION_PROMPT_HISTORY_MAX_CHARS))
+
+                for idx, cand in enumerate(candidates):
                     if not (cand or "").strip():
                         continue
                     fc, lc, qc = evaluate_profile_on_window(
                         cand,
-                        hist,
-                        targets,
+                        next_hist,
+                        next_targets,
                         action_model,
                         action_tokenizer,
                         semantic_scorer,
+                        profile_suffix=next_suffix,
                     )
+                    candidate_scores.append({
+                        "index": idx,
+                        "F": fc,
+                        "L": lc,
+                        "Q": qc,
+                    })
                     if qc > best_q:
                         best_q = qc
                         best_profile = cand
+                        best_idx = idx
+
                 profile = best_profile
-            continue
+                steps_out[-1]["profile_updated"] = (best_profile != old_profile)
+                steps_out[-1]["best_candidate_index"] = best_idx
+                steps_out[-1]["candidate_scores"] = candidate_scores
+
+            # 记录画像长度
+            steps_out[-1]["profile_length"] = len(profile)
+            steps_out[-1]["num_candidates"] = len(candidates)
+
+        # === 三窗口评估（所有方法）===
+        # 只在最后一次画像更新时进行三窗口评估，降低计算开销
+        # 判断是否是最后一步
+        is_last_step = (step_idx >= n_keys - 2)
+
+        # 记录画像变化前后在三个窗口上的表现
+        should_evaluate_three_windows = False
+
+        if method == "static_s0":
+            # static_s0: 只在最后一步记录一次（作为基线）
+            should_evaluate_three_windows = is_last_step
+        else:
+            # 其他方法: 只在最后一次画像更新时记录
+            # 如果是最后一步，且画像有更新，则记录
+            if is_last_step and old_profile != profile:
+                should_evaluate_three_windows = True
+
+        if should_evaluate_three_windows:
+            three_window_eval = evaluate_three_windows(
+                old_profile=old_profile,
+                new_profile=profile,
+                windows=windows,
+                keys=keys,
+                step_idx=step_idx,
+                action_model=action_model,
+                action_tokenizer=action_tokenizer,
+                semantic_scorer=semantic_scorer,
+            )
+            steps_out[-1]["three_window_evaluation"] = three_window_eval
+            steps_out[-1]["profile_changed"] = (old_profile != profile)
 
     qs = [float(s["Q"]) for s in steps_out]
     fs = [float(s["F"]) for s in steps_out]

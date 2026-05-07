@@ -1,0 +1,307 @@
+nohup: ignoring input
+[Pipeline] 批量模式: 共 4 个输入文件
+
+[Preflight] 模型连通性检测 ...
+  [✓] 画像生成模型 连通成功（响应: Hi! It's nice）
+  [✓] 动作预测模型 连通成功（响应: hi! :3）
+  [✓] Sentence Transformer 路径存在: /data/LLM_models/sentence-transformers/all-mpnet-base-v2
+[Preflight] 全部检测通过 ✓
+
+
+[Batch] (1/4) 开始处理: /home/xiaosong/personality/Clasp/output/windowed/train/community_0.jsonl
+[Pipeline] 处理 1182 个用户（本 run），候选线程 workers=10，用户进程数 user_processes=3，rounds=2
+[Pipeline] resume 模式：已恢复 1182 个用户，重建 DPO 对 3268 条
+[Pipeline] 已跳过 1182 个已完成用户，本次待处理 0 个
+
+[Pipeline] 总耗时: 0.0s | 平均每用户耗时: 0.0s
+
+[Pipeline] DPO 对写入完成: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_pairs_community_0.jsonl (3268 对)
+[Pipeline] 详细结果已保存: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_detail_community_0.json
+[Pipeline] 统计摘要已保存: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_summary_community_0.json
+
+[Batch] (2/4) 开始处理: /home/xiaosong/personality/Clasp/output/windowed/train/community_1.jsonl
+[Pipeline] 处理 404 个用户（本 run），候选线程 workers=10，用户进程数 user_processes=3，rounds=2
+[Pipeline] resume 模式：已恢复 404 个用户，重建 DPO 对 965 条
+[Pipeline] 已跳过 404 个已完成用户，本次待处理 0 个
+
+[Pipeline] 总耗时: 0.0s | 平均每用户耗时: 0.0s
+
+[Pipeline] DPO 对写入完成: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_pairs_community_1.jsonl (965 对)
+[Pipeline] 详细结果已保存: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_detail_community_1.json
+[Pipeline] 统计摘要已保存: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_summary_community_1.json
+
+[Batch] (3/4) 开始处理: /home/xiaosong/personality/Clasp/output/windowed/train/community_3.jsonl
+[Pipeline] 处理 610 个用户（本 run），候选线程 workers=10，用户进程数 user_processes=3，rounds=2
+[Pipeline] resume 模式：已恢复 610 个用户，重建 DPO 对 2002 条
+[Pipeline] 已跳过 610 个已完成用户，本次待处理 0 个
+
+[Pipeline] 总耗时: 0.0s | 平均每用户耗时: 0.0s
+
+[Pipeline] DPO 对写入完成: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_pairs_community_3.jsonl (2002 对)
+[Pipeline] 详细结果已保存: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_detail_community_3.json
+[Pipeline] 统计摘要已保存: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_summary_community_3.json
+
+[Batch] (4/4) 开始处理: /home/xiaosong/personality/Clasp/output/windowed/train/community_4.jsonl
+[Pipeline] 处理 899 个用户（本 run），候选线程 workers=10，用户进程数 user_processes=3，rounds=2
+[Pipeline] resume 模式：已恢复 647 个用户，重建 DPO 对 1723 条
+[Pipeline] 已跳过 647 个已完成用户，本次待处理 252 个
+[Pipeline] 多进程: 3 个进程并行不同用户；每进程内候选评估仍用 ThreadPool（最多 10 线程）。Sentence-Transformer: cpu
+[Pipeline] 多用户错开启动: 第 i 个用户任务在子进程内先等待 i×0.30s，再加载模型/请求（减轻 API 同时洪峰）
+[Pipeline] 完成 1/252 (0.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m16s 本批=1m18s 预计剩余=5h24m43s
+[Pipeline] 完成 2/252 (0.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m48s 本批=1m49s 预计剩余=3h47m26s
+[Pipeline] 完成 3/252 (1.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m58s 本批=3m1s 预计剩余=4h10m7s
+[Pipeline] 完成 4/252 (1.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m4s 本批=3m56s 预计剩余=4h3m35s
+[Pipeline] 完成 5/252 (2.0%) | DPO对=21 末轮候选=10 各轮{'round_1': 19, 'round_2': 2} | 本用户=3m54s 本批=5m14s 预计剩余=4h18m35s
+[Pipeline] 完成 6/252 (2.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m1s 本批=6m0s 预计剩余=4h6m10s
+[Pipeline] 完成 7/252 (2.8%) | DPO对=12 末轮候选=10 各轮{'round_1': 2, 'round_2': 10} | 本用户=4m19s 本批=7m23s 预计剩余=4h18m12s
+[Pipeline] 完成 8/252 (3.2%) | DPO对=5 末轮候选=10 各轮{'round_1': 1, 'round_2': 4} | 本用户=4m6s 本批=9m24s 预计剩余=4h46m37s
+[Pipeline] 完成 9/252 (3.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m58s 本批=10m2s 预计剩余=4h30m56s
+[Pipeline] 完成 10/252 (4.0%) | DPO对=8 末轮候选=10 各轮{'round_1': 2, 'round_2': 6} | 本用户=5m22s 本批=12m50s 预计剩余=5h10m34s
+[Pipeline] 完成 11/252 (4.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m17s 本批=15m13s 预计剩余=5h33m17s
+[Pipeline] 完成 12/252 (4.8%) | DPO对=3 末轮候选=10 各轮{'round_1': 3, 'round_2': 0} | 本用户=5m9s 本批=15m17s 预计剩余=5h5m38s
+[Pipeline] 完成 13/252 (5.2%) | DPO对=10 末轮候选=10 各轮{'round_1': 10, 'round_2': 0} | 本用户=6m7s 本批=15m36s 预计剩余=4h46m49s
+[Pipeline] 完成 14/252 (5.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m5s 本批=17m28s 预计剩余=4h56m54s
+[Pipeline] 完成 15/252 (6.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m41s 本批=17m59s 预计剩余=4h44m7s
+[Pipeline] 完成 16/252 (6.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m12s 本批=18m55s 预计剩余=4h38m54s
+[Pipeline] 完成 17/252 (6.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m24s 本批=21m31s 预计剩余=4h57m28s
+[Pipeline] 完成 18/252 (7.1%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=4m37s 本批=23m39s 预计剩余=5h7m23s
+[Pipeline] 完成 19/252 (7.5%) | DPO对=4 末轮候选=10 各轮{'round_1': 4, 'round_2': 0} | 本用户=6m9s 本批=23m45s 预计剩余=4h51m11s
+[Pipeline] 完成 20/252 (7.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m42s 本批=24m20s 预计剩余=4h42m14s
+[Pipeline] 完成 21/252 (8.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m56s 本批=26m42s 预计剩余=4h53m44s
+[Pipeline] 完成 22/252 (8.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m60s 本批=26m51s 预计剩余=4h40m43s
+[Pipeline] 完成 23/252 (9.1%) | DPO对=7 末轮候选=10 各轮{'round_1': 7, 'round_2': 0} | 本用户=4m32s 本批=29m1s 预计剩余=4h48m50s
+[Pipeline] 完成 24/252 (9.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m2s 本批=30m2s 预计剩余=4h45m16s
+[Pipeline] 完成 25/252 (9.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m43s 本批=32m55s 预计剩余=4h58m53s
+[Pipeline] 完成 26/252 (10.3%) | DPO对=7 末轮候选=10 各轮{'round_1': 3, 'round_2': 4} | 本用户=6m13s 本批=33m3s 预计剩余=4h47m14s
+[Pipeline] 完成 27/252 (10.7%) | DPO对=8 末轮候选=10 各轮{'round_1': 8, 'round_2': 0} | 本用户=5m7s 本批=34m17s 预计剩余=4h45m41s
+[Pipeline] 完成 28/252 (11.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m46s 本批=35m51s 预计剩余=4h46m49s
+[Pipeline] 完成 29/252 (11.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m49s 本批=36m3s 预计剩余=4h37m11s
+[Pipeline] 完成 30/252 (11.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m42s 本批=38m9s 预计剩余=4h42m19s
+[Pipeline] 完成 31/252 (12.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m50s 本批=39m4s 预计剩余=4h38m29s
+[Pipeline] 完成 32/252 (12.7%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=4m35s 本批=40m37s 预计剩余=4h39m11s
+[Pipeline] 完成 33/252 (13.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m44s 本批=41m4s 预计剩余=4h32m31s
+[Pipeline] 完成 34/252 (13.5%) | DPO对=14 末轮候选=10 各轮{'round_1': 6, 'round_2': 8} | 本用户=4m25s 本批=43m41s 预计剩余=4h40m4s
+[Pipeline] 完成 35/252 (13.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m56s 本批=43m45s 预计剩余=4h31m12s
+[Pipeline] 完成 36/252 (14.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m31s 本批=46m30s 预计剩余=4h38m59s
+[Pipeline] 完成 37/252 (14.7%) | DPO对=8 末轮候选=10 各轮{'round_1': 8, 'round_2': 0} | 本用户=3m49s 本批=47m43s 预计剩余=4h37m15s
+[Pipeline] 完成 38/252 (15.1%) | DPO对=22 末轮候选=10 各轮{'round_1': 15, 'round_2': 7} | 本用户=8m2s 本批=49m18s 预计剩余=4h37m39s
+[Pipeline] 完成 39/252 (15.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m47s 本批=51m19s 预计剩余=4h40m14s
+[Pipeline] 完成 40/252 (15.9%) | DPO对=19 末轮候选=10 各轮{'round_1': 13, 'round_2': 6} | 本用户=5m28s 本批=52m12s 预计剩余=4h36m39s
+[Pipeline] 完成 41/252 (16.3%) | DPO对=11 末轮候选=10 各轮{'round_1': 10, 'round_2': 1} | 本用户=4m40s 本批=52m37s 预计剩余=4h30m44s
+[Pipeline] 完成 42/252 (16.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m17s 本批=54m49s 预计剩余=4h34m6s
+[Pipeline] 完成 43/252 (17.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m53s 本批=55m44s 预计剩余=4h30m52s
+[Pipeline] 完成 44/252 (17.5%) | DPO对=8 末轮候选=10 各轮{'round_1': 8, 'round_2': 0} | 本用户=4m48s 本批=57m14s 预计剩余=4h30m32s
+[Pipeline] 完成 45/252 (17.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m39s 本批=59m38s 预计剩余=4h34m19s
+[Pipeline] 完成 46/252 (18.3%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=5m32s 本批=1h0m35s 预计剩余=4h31m18s
+[Pipeline] 完成 47/252 (18.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m18s 本批=1h0m48s 预计剩余=4h25m10s
+[Pipeline] 完成 48/252 (19.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m18s 本批=1h2m11s 预计剩余=4h24m19s
+[Pipeline] 完成 49/252 (19.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m13s 本批=1h4m4s 预计剩余=4h25m24s
+[Pipeline] 完成 50/252 (19.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m3s 本批=1h4m8s 预计剩余=4h19m6s
+[Pipeline] 完成 51/252 (20.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m3s 本批=1h5m31s 预计剩余=4h18m14s
+[Pipeline] 完成 52/252 (20.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m40s 本批=1h7m6s 预计剩余=4h18m3s
+[Pipeline] 完成 53/252 (21.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m30s 本批=1h9m19s 预计剩余=4h20m17s
+[Pipeline] 完成 54/252 (21.4%) | DPO对=8 末轮候选=10 各轮{'round_1': 6, 'round_2': 2} | 本用户=5m21s 本批=1h9m42s 预计剩余=4h15m33s
+[Pipeline] 完成 55/252 (21.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m6s 本批=1h10m30s 预计剩余=4h12m30s
+[Pipeline] 完成 56/252 (22.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m5s 本批=1h12m3s 预计剩余=4h12m11s
+[Pipeline] 完成 57/252 (22.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m32s 本批=1h12m9s 预计剩余=4h6m49s
+[Pipeline] 完成 58/252 (23.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m26s 本批=1h15m48s 预计剩余=4h13m32s
+[Pipeline] 完成 59/252 (23.4%) | DPO对=7 末轮候选=10 各轮{'round_1': 2, 'round_2': 5} | 本用户=5m3s 本批=1h15m52s 预计剩余=4h8m12s
+[Pipeline] 完成 60/252 (23.8%) | DPO对=5 末轮候选=10 各轮{'round_1': 5, 'round_2': 0} | 本用户=5m24s 本批=1h17m52s 预计剩余=4h9m12s
+[Pipeline] 完成 61/252 (24.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m46s 本批=1h18m54s 预计剩余=4h7m3s
+[Pipeline] 完成 62/252 (24.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m1s 本批=1h19m14s 预计剩余=4h2m49s
+[Pipeline] 完成 63/252 (25.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m28s 本批=1h20m41s 预计剩余=4h2m4s
+[Pipeline] 完成 64/252 (25.4%) | DPO对=4 末轮候选=10 各轮{'round_1': 4, 'round_2': 0} | 本用户=4m10s 本批=1h22m24s 预计剩余=4h2m2s
+[Pipeline] 完成 65/252 (25.8%) | DPO对=12 末轮候选=10 各轮{'round_1': 12, 'round_2': 0} | 本用户=4m4s 本批=1h23m38s 预计剩余=4h0m37s
+[Pipeline] 完成 66/252 (26.2%) | DPO对=7 末轮候选=10 各轮{'round_1': 7, 'round_2': 0} | 本用户=5m47s 本批=1h26m50s 预计剩余=4h4m43s
+[Pipeline] 完成 67/252 (26.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m10s 本批=1h27m10s 预计剩余=4h0m40s
+[Pipeline] 完成 68/252 (27.0%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=5m42s 本批=1h28m27s 预计剩余=3h59m21s
+[Pipeline] 完成 69/252 (27.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m34s 本批=1h30m6s 预计剩余=3h58m58s
+[Pipeline] 完成 70/252 (27.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m8s 本批=1h30m20s 预计剩余=3h54m52s
+[Pipeline] 完成 71/252 (28.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m32s 本批=1h31m22s 预计剩余=3h52m56s
+[Pipeline] 完成 72/252 (28.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m51s 本批=1h33m20s 预计剩余=3h53m20s
+[Pipeline] 完成 73/252 (29.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m15s 本批=1h33m59s 预计剩余=3h50m28s
+[Pipeline] 完成 74/252 (29.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m52s 本批=1h34m38s 预计剩余=3h47m38s
+[Pipeline] 完成 75/252 (29.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m28s 本批=1h36m52s 预计剩余=3h48m35s
+[Pipeline] 完成 76/252 (30.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m35s 本批=1h37m19s 预计剩余=3h45m22s
+[Pipeline] 完成 77/252 (30.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m20s 本批=1h40m36s 预计剩余=3h48m39s
+[Pipeline] 完成 78/252 (31.0%) | DPO对=5 末轮候选=10 各轮{'round_1': 5, 'round_2': 0} | 本用户=5m36s 本批=1h40m39s 预计剩余=3h44m31s
+[Pipeline] 完成 79/252 (31.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m38s 本批=1h42m40s 预计剩余=3h44m49s
+[Pipeline] 完成 80/252 (31.7%) | DPO对=8 末轮候选=10 各轮{'round_1': 1, 'round_2': 7} | 本用户=5m36s 本批=1h43m20s 预计剩余=3h42m11s
+[Pipeline] 完成 81/252 (32.1%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=6m6s 本批=1h47m10s 预计剩余=3h46m14s
+[Pipeline] 完成 82/252 (32.5%) | DPO对=4 末轮候选=10 各轮{'round_1': 4, 'round_2': 0} | 本用户=4m46s 本批=1h47m52s 预计剩余=3h43m38s
+[Pipeline] 完成 83/252 (32.9%) | DPO对=8 末轮候选=10 各轮{'round_1': 8, 'round_2': 0} | 本用户=6m5s 本批=1h49m53s 预计剩余=3h43m44s
+[Pipeline] 完成 84/252 (33.3%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=4m46s 本批=1h53m4s 预计剩余=3h46m8s
+[Pipeline] 完成 85/252 (33.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=4m2s 本批=1h54m23s 预计剩余=3h44m43s
+[Pipeline] 完成 86/252 (34.1%) | DPO对=15 末轮候选=10 各轮{'round_1': 12, 'round_2': 3} | 本用户=7m11s 本批=1h54m47s 预计剩余=3h41m34s
+[Pipeline] 完成 87/252 (34.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m31s 本批=1h56m2s 预计剩余=3h40m5s
+[Pipeline] 完成 88/252 (34.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=4m15s 本批=1h59m31s 预计剩余=3h42m45s
+[Pipeline] 完成 89/252 (35.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m12s 本批=1h59m43s 预计剩余=3h39m15s
+[Pipeline] 完成 90/252 (35.7%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=6m15s 本批=2h1m5s 预计剩余=3h37m58s
+[Pipeline] 完成 91/252 (36.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m1s 本批=2h3m2s 预计剩余=3h37m40s
+[Pipeline] 完成 92/252 (36.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m27s 本批=2h4m2s 预计剩余=3h35m43s
+[Pipeline] 完成 93/252 (36.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=4m53s 本批=2h5m4s 预计剩余=3h33m50s
+[Pipeline] 完成 94/252 (37.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m57s 本批=2h7m29s 预计剩余=3h34m17s
+[Pipeline] 完成 95/252 (37.7%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=5m26s 本批=2h9m58s 预计剩余=3h34m48s
+[Pipeline] 完成 96/252 (38.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m6s 本批=2h11m5s 预计剩余=3h33m0s
+[Pipeline] 完成 97/252 (38.5%) | DPO对=5 末轮候选=10 各轮{'round_1': 5, 'round_2': 0} | 本用户=7m20s 本批=2h12m54s 预计剩余=3h32m22s
+[Pipeline] 完成 98/252 (38.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m27s 本批=2h14m3s 预计剩余=3h30m39s
+[Pipeline] 完成 99/252 (39.3%) | DPO对=7 末轮候选=10 各轮{'round_1': 7, 'round_2': 0} | 本用户=6m6s 本批=2h16m36s 预计剩余=3h31m7s
+[Pipeline] 完成 100/252 (39.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=4m33s 本批=2h17m59s 预计剩余=3h29m44s
+[Pipeline] 完成 101/252 (40.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m56s 本批=2h20m4s 预计剩余=3h29m25s
+[Pipeline] 完成 102/252 (40.5%) | DPO对=7 末轮候选=10 各轮{'round_1': 6, 'round_2': 1} | 本用户=10m10s 本批=2h24m45s 预计剩余=3h32m51s
+[Pipeline] 完成 103/252 (40.9%) | DPO对=6 末轮候选=10 各轮{'round_1': 6, 'round_2': 0} | 本用户=6m19s 本批=2h24m50s 预计剩余=3h29m31s
+[Pipeline] 完成 104/252 (41.3%) | DPO对=10 末轮候选=10 各轮{'round_1': 3, 'round_2': 7} | 本用户=5m35s 本批=2h26m12s 预计剩余=3h28m4s
+[Pipeline] 完成 105/252 (41.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m59s 本批=2h28m17s 预计剩余=3h27m35s
+[Pipeline] 完成 106/252 (42.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m10s 本批=2h28m55s 预计剩余=3h25m7s
+[Pipeline] 完成 107/252 (42.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m39s 本批=2h29m1s 预计剩余=3h21m56s
+[Pipeline] 完成 108/252 (42.9%) | DPO对=16 末轮候选=10 各轮{'round_1': 6, 'round_2': 10} | 本用户=5m35s 本批=2h34m25s 预计剩余=3h25m53s
+[Pipeline] 完成 109/252 (43.3%) | DPO对=8 末轮候选=10 各轮{'round_1': 4, 'round_2': 4} | 本用户=7m19s 本批=2h36m54s 预计剩余=3h25m50s
+[Pipeline] 完成 110/252 (43.7%) | DPO对=8 末轮候选=10 各轮{'round_1': 8, 'round_2': 0} | 本用户=7m40s 本批=2h37m10s 预计剩余=3h22m53s
+[Pipeline] 完成 111/252 (44.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=5m13s 本批=2h40m13s 预计剩余=3h23m31s
+[Pipeline] 完成 112/252 (44.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m22s 本批=2h41m7s 预计剩余=3h21m24s
+[Pipeline] 完成 113/252 (44.8%) | DPO对=8 末轮候选=10 各轮{'round_1': 8, 'round_2': 0} | 本用户=5m16s 本批=2h42m45s 预计剩余=3h20m12s
+[Pipeline] 完成 114/252 (45.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m15s 本批=2h44m58s 预计剩余=3h19m42s
+[Pipeline] 完成 115/252 (45.6%) | DPO对=4 末轮候选=10 各轮{'round_1': 4, 'round_2': 0} | 本用户=4m53s 本批=2h45m41s 预计剩余=3h17m22s
+[Pipeline] 完成 116/252 (46.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m25s 本批=2h49m43s 预计剩余=3h18m59s
+[Pipeline] 完成 117/252 (46.4%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=9m15s 本批=2h52m36s 预计剩余=3h19m9s
+[Pipeline] 完成 118/252 (46.8%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=7m20s 本批=2h52m54s 预计剩余=3h16m21s
+[Pipeline] 完成 119/252 (47.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m52s 本批=2h56m5s 预计剩余=3h16m48s
+[Pipeline] 完成 120/252 (47.6%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=7m48s 本批=2h58m8s 预计剩余=3h15m57s
+[Pipeline] 完成 121/252 (48.0%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=5m36s 本批=2h59m8s 预计剩余=3h13m57s
+[Pipeline] 完成 122/252 (48.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m12s 本批=2h59m54s 预计剩余=3h11m42s
+[Pipeline] 完成 123/252 (48.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m17s 本批=3h1m2s 预计剩余=3h9m52s
+[Pipeline] 完成 124/252 (49.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m35s 本批=3h2m23s 预计剩余=3h8m16s
+[Pipeline] 完成 125/252 (49.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m6s 本批=3h3m47s 预计剩余=3h6m43s
+[Pipeline] 完成 126/252 (50.0%) | DPO对=10 末轮候选=10 各轮{'round_1': 8, 'round_2': 2} | 本用户=5m44s 本批=3h6m16s 预计剩余=3h6m16s
+[Pipeline] 完成 127/252 (50.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m22s 本批=3h6m25s 预计剩余=3h3m28s
+[Pipeline] 完成 128/252 (50.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m13s 本批=3h7m39s 预计剩余=3h1m47s
+[Pipeline] 完成 129/252 (51.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m52s 本批=3h9m57s 预计剩余=3h1m7s
+[Pipeline] 完成 130/252 (51.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m25s 本批=3h10m44s 预计剩余=2h59m0s
+[Pipeline] 完成 131/252 (52.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=4m4s 本批=3h11m1s 预计剩余=2h56m26s
+[Pipeline] 完成 132/252 (52.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m56s 本批=3h15m21s 预计剩余=2h57m36s
+[Pipeline] 完成 133/252 (52.8%) | DPO对=8 末轮候选=10 各轮{'round_1': 5, 'round_2': 3} | 本用户=5m16s 本批=3h15m54s 预计剩余=2h55m17s
+[Pipeline] 完成 134/252 (53.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=4m16s 本批=3h15m58s 预计剩余=2h52m34s
+[Pipeline] 完成 135/252 (53.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m3s 本批=3h18m6s 预计剩余=2h51m42s
+[Pipeline] 完成 136/252 (54.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m47s 本批=3h20m24s 预计剩余=2h50m55s
+[Pipeline] 完成 137/252 (54.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=4m15s 本批=3h20m55s 预计剩余=2h48m39s
+[Pipeline] 完成 138/252 (54.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m24s 本批=3h24m30s 预计剩余=2h48m56s
+[Pipeline] 完成 139/252 (55.2%) | DPO对=9 末轮候选=10 各轮{'round_1': 9, 'round_2': 0} | 本用户=6m6s 本批=3h24m55s 预计剩余=2h46m35s
+[Pipeline] 完成 140/252 (55.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m20s 本批=3h24m58s 预计剩余=2h43m58s
+[Pipeline] 完成 141/252 (56.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m52s 本批=3h27m30s 预计剩余=2h43m21s
+[Pipeline] 完成 142/252 (56.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m33s 本批=3h29m16s 预计剩余=2h42m6s
+[Pipeline] 完成 143/252 (56.7%) | DPO对=11 末轮候选=10 各轮{'round_1': 4, 'round_2': 7} | 本用户=4m35s 本批=3h29m49s 预计剩余=2h39m56s
+[Pipeline] 完成 144/252 (57.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m55s 本批=3h31m9s 预计剩余=2h38m22s
+[Pipeline] 完成 145/252 (57.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=4m16s 本批=3h36m11s 预计剩余=2h39m32s
+[Pipeline] 完成 146/252 (57.9%) | DPO对=19 末轮候选=10 各轮{'round_1': 6, 'round_2': 13} | 本用户=5m45s 本批=3h36m19s 预计剩余=2h37m3s
+[Pipeline] 完成 147/252 (58.3%) | DPO对=11 末轮候选=10 各轮{'round_1': 10, 'round_2': 1} | 本用户=6m27s 本批=3h36m28s 预计剩余=2h34m37s
+[Pipeline] 完成 148/252 (58.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m23s 本批=3h38m19s 预计剩余=2h33m25s
+[Pipeline] 完成 149/252 (59.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m2s 本批=3h41m7s 预计剩余=2h32m51s
+[Pipeline] 完成 150/252 (59.5%) | DPO对=20 末轮候选=10 各轮{'round_1': 20, 'round_2': 0} | 本用户=4m46s 本批=3h42m0s 预计剩余=2h30m58s
+[Pipeline] 完成 151/252 (59.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=5m1s 本批=3h42m6s 预计剩余=2h28m33s
+[Pipeline] 完成 152/252 (60.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m1s 本批=3h43m55s 预计剩余=2h27m19s
+[Pipeline] 完成 153/252 (60.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m52s 本批=3h45m40s 预计剩余=2h26m1s
+[Pipeline] 完成 154/252 (61.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m43s 本批=3h47m26s 预计剩余=2h24m44s
+[Pipeline] 完成 155/252 (61.5%) | DPO对=6 末轮候选=10 各轮{'round_1': 6, 'round_2': 0} | 本用户=6m44s 本批=3h49m38s 预计剩余=2h23m42s
+[Pipeline] 完成 156/252 (61.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m21s 本批=3h49m50s 预计剩余=2h21m26s
+[Pipeline] 完成 157/252 (62.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m43s 本批=3h50m58s 预计剩余=2h19m45s
+[Pipeline] 完成 158/252 (62.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m45s 本批=3h53m11s 预计剩余=2h18m43s
+[Pipeline] 完成 159/252 (63.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m36s 本批=3h53m14s 预计剩余=2h16m25s
+[Pipeline] 完成 160/252 (63.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m58s 本批=3h54m45s 预计剩余=2h14m59s
+[Pipeline] 完成 161/252 (63.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m54s 本批=3h57m59s 预计剩余=2h14m31s
+[Pipeline] 完成 162/252 (64.3%) | DPO对=4 末轮候选=10 各轮{'round_1': 4, 'round_2': 0} | 本用户=5m29s 本批=3h59m28s 预计剩余=2h13m2s
+[Pipeline] 完成 163/252 (64.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m55s 本批=3h59m30s 预计剩余=2h10m46s
+[Pipeline] 完成 164/252 (65.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m47s 本批=4h0m37s 预计剩余=2h9m7s
+[Pipeline] 完成 165/252 (65.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m25s 本批=4h2m45s 预计剩余=2h7m60s
+[Pipeline] 完成 166/252 (65.9%) | DPO对=12 末轮候选=10 各轮{'round_1': 10, 'round_2': 2} | 本用户=4m54s 本批=4h5m12s 预计剩余=2h7m2s
+[Pipeline] 完成 167/252 (66.3%) | DPO对=6 末轮候选=10 各轮{'round_1': 6, 'round_2': 0} | 本用户=4m50s 本批=4h8m27s 预计剩余=2h6m28s
+[Pipeline] 完成 168/252 (66.7%) | DPO对=5 末轮候选=10 各轮{'round_1': 5, 'round_2': 0} | 本用户=7m20s 本批=4h8m48s 预计剩余=2h4m24s
+[Pipeline] 完成 169/252 (67.1%) | DPO对=14 末轮候选=10 各轮{'round_1': 10, 'round_2': 4} | 本用户=4m27s 本批=4h10m32s 预计剩余=2h3m3s
+[Pipeline] 完成 170/252 (67.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m45s 本批=4h12m6s 预计剩余=2h1m36s
+[Pipeline] 完成 171/252 (67.9%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=4m53s 本批=4h14m33s 预计剩余=2h0m35s
+[Pipeline] 完成 172/252 (68.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m40s 本批=4h16m40s 预计剩余=1h59m23s
+[Pipeline] 完成 173/252 (68.7%) | DPO对=20 末轮候选=10 各轮{'round_1': 20, 'round_2': 0} | 本用户=5m50s 本批=4h17m15s 预计剩余=1h57m28s
+[Pipeline] 完成 174/252 (69.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m36s 本批=4h18m2s 预计剩余=1h55m40s
+[Pipeline] 完成 175/252 (69.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m5s 本批=4h19m39s 预计剩余=1h54m15s
+[Pipeline] 完成 176/252 (69.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m6s 本批=4h20m14s 预计剩余=1h52m22s
+[Pipeline] 完成 177/252 (70.2%) | DPO对=10 末轮候选=10 各轮{'round_1': 3, 'round_2': 7} | 本用户=4m1s 本批=4h24m35s 预计剩余=1h52m7s
+[Pipeline] 完成 178/252 (70.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m32s 本批=4h24m40s 预计剩余=1h50m2s
+[Pipeline] 完成 179/252 (71.0%) | DPO对=7 末轮候选=10 各轮{'round_1': 5, 'round_2': 2} | 本用户=7m5s 本批=4h26m3s 预计剩余=1h48m30s
+[Pipeline] 完成 180/252 (71.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m38s 本批=4h28m8s 预计剩余=1h47m15s
+[Pipeline] 完成 181/252 (71.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m36s 本批=4h28m13s 预计剩余=1h45m13s
+[Pipeline] 完成 182/252 (72.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m45s 本批=4h28m43s 预计剩余=1h43m21s
+[Pipeline] 完成 183/252 (72.6%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=3m14s 本批=4h32m18s 预计剩余=1h42m40s
+[Pipeline] 完成 184/252 (73.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m13s 本批=4h32m52s 预计剩余=1h40m51s
+[Pipeline] 完成 185/252 (73.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m8s 本批=4h35m23s 预计剩余=1h39m44s
+[Pipeline] 完成 186/252 (73.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m7s 本批=4h35m56s 预计剩余=1h37m55s
+[Pipeline] 完成 187/252 (74.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m3s 本批=4h38m57s 预计剩余=1h36m58s
+[Pipeline] 完成 188/252 (74.6%) | DPO对=19 末轮候选=10 各轮{'round_1': 6, 'round_2': 13} | 本用户=3m34s 本批=4h39m55s 预计剩余=1h35m18s
+[Pipeline] 完成 189/252 (75.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m37s 本批=4h41m34s 预计剩余=1h33m51s
+[Pipeline] 完成 190/252 (75.4%) | DPO对=12 末轮候选=10 各轮{'round_1': 12, 'round_2': 0} | 本用户=13m50s 本批=4h42m60s 预计剩余=1h32m21s
+[Pipeline] 完成 191/252 (75.8%) | DPO对=28 末轮候选=10 各轮{'round_1': 8, 'round_2': 20} | 本用户=3m60s 本批=4h44m54s 预计剩余=1h30m59s
+[Pipeline] 完成 192/252 (76.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m9s 本批=4h46m8s 预计剩余=1h29m25s
+[Pipeline] 完成 193/252 (76.6%) | DPO对=2 末轮候选=10 各轮{'round_1': 1, 'round_2': 1} | 本用户=4m17s 本批=4h46m50s 预计剩余=1h27m41s
+[Pipeline] 完成 194/252 (77.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m2s 本批=4h47m56s 预计剩余=1h26m5s
+[Pipeline] 完成 195/252 (77.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m8s 本批=4h49m57s 预计剩余=1h24m45s
+[Pipeline] 完成 196/252 (77.8%) | DPO对=5 末轮候选=10 各轮{'round_1': 5, 'round_2': 0} | 本用户=5m4s 本批=4h52m11s 预计剩余=1h23m29s
+[Pipeline] 完成 197/252 (78.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m54s 本批=4h53m52s 预计剩余=1h22m3s
+[Pipeline] 完成 198/252 (78.6%) | DPO对=3 末轮候选=10 各轮{'round_1': 3, 'round_2': 0} | 本用户=5m57s 本批=4h54m54s 预计剩余=1h20m26s
+[Pipeline] 完成 199/252 (79.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m29s 本批=4h55m41s 预计剩余=1h18m45s
+[Pipeline] 完成 200/252 (79.4%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=3m26s 本批=4h58m19s 预计剩余=1h17m34s
+[Pipeline] 完成 201/252 (79.8%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=4m8s 本批=5h0m4s 预计剩余=1h16m8s
+[Pipeline] 完成 202/252 (80.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m24s 本批=5h0m6s 预计剩余=1h14m17s
+[Pipeline] 完成 203/252 (80.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m24s 本批=5h1m46s 预计剩余=1h12m50s
+[Pipeline] 完成 204/252 (81.0%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m27s 本批=5h3m33s 预计剩余=1h11m25s
+[Pipeline] 完成 205/252 (81.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m39s 本批=5h3m49s 预计剩余=1h9m39s
+[Pipeline] 完成 206/252 (81.7%) | DPO对=11 末轮候选=10 各轮{'round_1': 2, 'round_2': 9} | 本用户=5m21s 本批=5h8m12s 预计剩余=1h8m49s
+[Pipeline] 完成 207/252 (82.1%) | DPO对=15 末轮候选=10 各轮{'round_1': 15, 'round_2': 0} | 本用户=4m15s 本批=5h8m52s 预计剩余=1h7m9s
+[Pipeline] 完成 208/252 (82.5%) | DPO对=5 末轮候选=10 各轮{'round_1': 5, 'round_2': 0} | 本用户=4m41s 本批=5h9m33s 预计剩余=1h5m29s
+[Pipeline] 完成 209/252 (82.9%) | DPO对=41 末轮候选=10 各轮{'round_1': 20, 'round_2': 21} | 本用户=3m38s 本批=5h12m53s 预计剩余=1h4m22s
+[Pipeline] 完成 210/252 (83.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m40s 本批=5h13m19s 预计剩余=1h2m40s
+[Pipeline] 完成 211/252 (83.7%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=4m31s 本批=5h14m27s 预计剩余=1h1m6s
+[Pipeline] 完成 212/252 (84.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m3s 本批=5h18m35s 预计剩余=1h0m7s
+[Pipeline] 完成 213/252 (84.5%) | DPO对=4 末轮候选=10 各轮{'round_1': 4, 'round_2': 0} | 本用户=5m1s 本批=5h19m24s 预计剩余=58m29s
+[Pipeline] 完成 214/252 (84.9%) | DPO对=3 末轮候选=10 各轮{'round_1': 3, 'round_2': 0} | 本用户=5m34s 本批=5h19m33s 预计剩余=56m45s
+[Pipeline] 完成 215/252 (85.3%) | DPO对=16 末轮候选=10 各轮{'round_1': 6, 'round_2': 10} | 本用户=3m29s 本批=5h23m11s 预计剩余=55m37s
+[Pipeline] 完成 216/252 (85.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m3s 本批=5h23m33s 预计剩余=53m55s
+[Pipeline] 完成 217/252 (86.1%) | DPO对=5 末轮候选=10 各轮{'round_1': 3, 'round_2': 2} | 本用户=4m14s 本批=5h24m54s 预计剩余=52m24s
+[Pipeline] 完成 218/252 (86.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m35s 本批=5h25m52s 预计剩余=50m49s
+[Pipeline] 完成 219/252 (86.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m19s 本批=5h26m59s 预计剩余=49m16s
+[Pipeline] 完成 220/252 (87.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m48s 本批=5h27m49s 预计剩余=47m41s
+[Pipeline] 完成 221/252 (87.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m11s 本批=5h29m10s 预计剩余=46m10s
+[Pipeline] 完成 222/252 (88.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m24s 本批=5h30m31s 预计剩余=44m40s
+[Pipeline] 完成 223/252 (88.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m31s 本批=5h32m50s 预计剩余=43m17s
+[Pipeline] 完成 224/252 (88.9%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=4m30s 本批=5h33m26s 预计剩余=41m41s
+[Pipeline] 完成 225/252 (89.3%) | DPO对=5 末轮候选=10 各轮{'round_1': 5, 'round_2': 0} | 本用户=5m3s 本批=5h36m42s 预计剩余=40m24s
+[Pipeline] 完成 226/252 (89.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m13s 本批=5h36m49s 预计剩余=38m45s
+[Pipeline] 完成 227/252 (90.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m4s 本批=5h37m3s 预计剩余=37m7s
+[Pipeline] 完成 228/252 (90.5%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m30s 本批=5h41m44s 预计剩余=35m58s
+[Pipeline] 完成 229/252 (90.9%) | DPO对=3 末轮候选=10 各轮{'round_1': 1, 'round_2': 2} | 本用户=5m27s 本批=5h43m20s 预计剩余=34m29s
+[Pipeline] 完成 230/252 (91.3%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=6m10s 本批=5h44m9s 预计剩余=32m55s
+[Pipeline] 完成 231/252 (91.7%) | DPO对=4 末轮候选=10 各轮{'round_1': 4, 'round_2': 0} | 本用户=4m17s 本批=5h47m12s 预计剩余=31m34s
+[Pipeline] 完成 232/252 (92.1%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m34s 本批=5h47m54s 预计剩余=29m60s
+[Pipeline] 完成 233/252 (92.5%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=4m55s 本批=5h49m26s 预计剩余=28m30s
+[Pipeline] 完成 234/252 (92.9%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m26s 本批=5h50m51s 预计剩余=26m59s
+[Pipeline] 完成 235/252 (93.3%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m28s 本批=5h53m6s 预计剩余=25m33s
+[Pipeline] 完成 236/252 (93.7%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m29s 本批=5h53m32s 预计剩余=23m58s
+[Pipeline] 完成 237/252 (94.0%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=5m31s 本批=5h54m36s 预计剩余=22m27s
+[Pipeline] 完成 238/252 (94.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m43s 本批=5h56m1s 预计剩余=20m57s
+[Pipeline] 完成 239/252 (94.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m46s 本批=5h57m31s 预计剩余=19m27s
+[Pipeline] 完成 240/252 (95.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m35s 本批=5h59m49s 预计剩余=17m59s
+[Pipeline] 完成 241/252 (95.6%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=5m9s 本批=6h0m59s 预计剩余=16m29s
+[Pipeline] 完成 242/252 (96.0%) | DPO对=6 末轮候选=10 各轮{'round_1': 4, 'round_2': 2} | 本用户=4m31s 本批=6h3m16s 预计剩余=15m1s
+[Pipeline] 完成 243/252 (96.4%) | DPO对=5 末轮候选=10 各轮{'round_1': 2, 'round_2': 3} | 本用户=4m27s 本批=6h5m30s 预计剩余=13m32s
+[Pipeline] 完成 244/252 (96.8%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m58s 本批=6h6m29s 预计剩余=12m1s
+[Pipeline] 完成 245/252 (97.2%) | DPO对=2 末轮候选=10 各轮{'round_1': 2, 'round_2': 0} | 本用户=4m38s 本批=6h6m52s 预计剩余=10m29s
+[Pipeline] 完成 246/252 (97.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=1m32s 本批=6h8m18s 预计剩余=8m59s
+[Pipeline] 完成 247/252 (98.0%) | DPO对=16 末轮候选=10 各轮{'round_1': 16, 'round_2': 0} | 本用户=4m37s 本批=6h12m44s 预计剩余=7m33s
+[Pipeline] 完成 248/252 (98.4%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=3m13s 本批=6h12m47s 预计剩余=6m1s
+[Pipeline] 完成 249/252 (98.8%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=5m7s 本批=6h12m51s 预计剩余=4m30s
+[Pipeline] 完成 250/252 (99.2%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m10s 本批=6h16m14s 预计剩余=3m1s
+[Pipeline] 完成 251/252 (99.6%) | DPO对=0 末轮候选=10 各轮{'round_1': 0} | 本用户=2m44s 本批=6h16m52s 预计剩余=1m30s
+[Pipeline] 完成 252/252 (100.0%) | DPO对=1 末轮候选=10 各轮{'round_1': 1, 'round_2': 0} | 本用户=3m56s 本批=6h17m57s 预计剩余=0s
+
+[Pipeline] 总耗时: 22679.5s | 平均每用户耗时: 90.0s
+
+[Pipeline] DPO 对写入完成: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_pairs_community_4.jsonl (2467 对)
+[Pipeline] 详细结果已保存: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_detail_community_4.json
+[Pipeline] 统计摘要已保存: /home/xiaosong/personality/Clasp/output/dpo/train/dpo_summary_community_4.json
