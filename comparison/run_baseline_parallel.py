@@ -16,8 +16,16 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from comparison.baseline_resume import load_completed_keys_per_method, serialize_user_key
-from comparison.window_chain_eval import evaluate_user_window_chain
+from comparison.baseline_resume import (
+    filter_users_per_community,
+    load_completed_keys_per_method,
+    serialize_user_key,
+)
+from comparison.window_chain_eval import (
+    CLASP_ONLINE_VARIANTS,
+    CLASP_PROFILE_SNAPSHOT_FILENAME,
+    evaluate_user_window_chain,
+)
 from src.config import DPO_USER_PROCESSES, DPO_WORKERS
 from src.scorer import SemanticScorer
 
@@ -30,7 +38,9 @@ def _baseline_user_worker(job: tuple) -> tuple:
         job: (
             user_index, user_data, methods, workers, scorer_device, stagger_sec,
             completed_by_method, refinement_variants, always_accept_refinement,
-            clasp_profile_snapshot_dir, action_prompt_include_observed_history,
+            comparison_root_str, output_stem, record_profile_snapshots,
+            action_prompt_include_observed_history,
+            enable_three_window_evaluation,
         )
 
     Returns:
@@ -46,8 +56,11 @@ def _baseline_user_worker(job: tuple) -> tuple:
         completed_by_method,
         refinement_variants,
         always_accept_refinement,
-        clasp_profile_snapshot_dir,
+        comparison_root_str,
+        output_stem,
+        record_profile_snapshots,
         action_prompt_include_observed_history,
+        enable_three_window_evaluation,
     ) = job
 
     # 错开启动，减轻 API 洪峰
@@ -64,11 +77,7 @@ def _baseline_user_worker(job: tuple) -> tuple:
 
     ukey = _uk(user_data)
 
-    snap_dir: Optional[Path] = (
-        Path(clasp_profile_snapshot_dir)
-        if clasp_profile_snapshot_dir
-        else None
-    )
+    comparison_root = Path(comparison_root_str)
 
     # 对该用户评估尚未完成的方法
     results = {}
@@ -77,6 +86,9 @@ def _baseline_user_worker(job: tuple) -> tuple:
         if ukey in done:
             continue
         try:
+            snap_dir: Optional[Path] = None
+            if record_profile_snapshots and method in CLASP_ONLINE_VARIANTS:
+                snap_dir = comparison_root / method / "profile_snapshots" / output_stem
             r = evaluate_user_window_chain(
                 user_data,
                 method,
@@ -88,11 +100,12 @@ def _baseline_user_worker(job: tuple) -> tuple:
                 refinement_variants=int(refinement_variants),
                 workers=workers,
                 always_accept_refinement=bool(always_accept_refinement),
-                profile_snapshot_dir=(
-                    snap_dir if method == "clasp_online" else None
-                ),
+                profile_snapshot_dir=snap_dir,
                 action_prompt_include_observed_history=bool(
                     action_prompt_include_observed_history
+                ),
+                enable_three_window_evaluation=bool(
+                    enable_three_window_evaluation
                 ),
             )
             results[method] = r
@@ -126,6 +139,8 @@ def run_baseline_comparison_parallel(
     always_accept_refinement: bool = False,
     record_profile_snapshots: bool = True,
     action_prompt_include_observed_history: bool = True,
+    enable_three_window_evaluation: bool = True,
+    max_users_per_community: int = 100,
 ) -> None:
     """
     并行化的基线对比评估
@@ -143,14 +158,21 @@ def run_baseline_comparison_parallel(
         split: 数据集划分
         resume: True 时不覆盖已有 jsonl，仅追加未完成用户；按各 method 文件跳过已成功行
         refinement_variants / always_accept_refinement: 与串行 CLI 一致
-        record_profile_snapshots: True 且 methods 含 clasp_online 时写入画像快照目录
+        record_profile_snapshots: True 且 methods 含 clasp_online / clasp_online_no_hist 时写入各 method 下画像快照目录
         action_prompt_include_observed_history: False 时动作 prompt 不含观测历史（与串行 CLI 一致）
+        enable_three_window_evaluation: False 时跳过链末三窗口评估（与串行 CLI 一致）
+        max_users_per_community: >0 时每社区仅保留前 K 条用户（输入顺序）；0 不限制（与串行 CLI 一致）
     """
     print(f"\n[BaselineChain] 并行化评估启动", flush=True)
     print(f"  方法: {', '.join(methods)}", flush=True)
     print(f"  用户进程数: {user_processes}", flush=True)
     print(f"  候选评估线程数: {workers}", flush=True)
     print(f"  语义评分器: {scorer_device}", flush=True)
+    if max_users_per_community > 0:
+        print(
+            f"  每社区最多用户数: {max_users_per_community}（0=不限制）",
+            flush=True,
+        )
 
     # 加载所有用户
     users = []
@@ -167,21 +189,31 @@ def run_baseline_comparison_parallel(
                 except json.JSONDecodeError:
                     continue
 
+    n_loaded = len(users)
+    users = filter_users_per_community(users, max_users_per_community)
+    if max_users_per_community > 0 and len(users) < n_loaded:
+        print(
+            f"[BaselineChain] 按社区裁剪: {n_loaded} -> {len(users)} 用户 "
+            f"（每社区≤{max_users_per_community}）",
+            flush=True,
+        )
+
     if max_users:
         users = users[:max_users]
 
-    clasp_snap_dir: Optional[Path] = None
-    clasp_snap_str: Optional[str] = None
-    if record_profile_snapshots and "clasp_online" in methods:
-        clasp_snap_dir = (
-            comparison_root / "clasp_online" / "profile_snapshots" / output_stem
-        )
-        clasp_snap_dir.mkdir(parents=True, exist_ok=True)
-        clasp_snap_str = str(clasp_snap_dir.resolve())
-        print(
-            f"[BaselineChain] clasp_online 画像快照目录: {clasp_snap_dir}",
-            flush=True,
-        )
+    if record_profile_snapshots:
+        for sm in methods:
+            if sm not in CLASP_ONLINE_VARIANTS:
+                continue
+            d = comparison_root / sm / "profile_snapshots" / output_stem
+            d.mkdir(parents=True, exist_ok=True)
+            _p = d / CLASP_PROFILE_SNAPSHOT_FILENAME
+            if not resume:
+                _p.unlink(missing_ok=True)
+            print(
+                f"[BaselineChain] {sm} 画像快照（单文件，resume={'追加' if resume else '新文件'}）: {_p}",
+                flush=True,
+            )
 
     method_paths: Dict[str, Path] = {}
     for m in methods:
@@ -235,8 +267,11 @@ def run_baseline_comparison_parallel(
             completed_by_m,
             refinement_variants,
             always_accept_refinement,
-            clasp_snap_str,
+            str(comparison_root.resolve()),
+            output_stem,
+            record_profile_snapshots,
             action_prompt_include_observed_history,
+            enable_three_window_evaluation,
         )
         for i, user in enumerate(users_work)
     ]
@@ -265,9 +300,10 @@ def run_baseline_comparison_parallel(
                 # 打印进度
                 batch_elapsed = time.time() - run_start
                 pct = 100.0 * done_count / n_users
+                # 墙钟总耗时 / 已完成用户数（与 ETA 所用「平均每完成一人间隔」一致）
+                avg_per_user = batch_elapsed / done_count
                 if done_count < n_users:
-                    avg_time = batch_elapsed / done_count
-                    eta_sec = avg_time * (n_users - done_count)
+                    eta_sec = avg_per_user * (n_users - done_count)
                     eta_str = f"{int(eta_sec // 60)}m{int(eta_sec % 60)}s"
                 else:
                     eta_str = "—"
@@ -280,7 +316,8 @@ def run_baseline_comparison_parallel(
                 print(
                     f"[{done_count}/{n_users}] ({pct:.1f}%) "
                     f"user={user_id} | "
-                    f"用时={user_elapsed:.1f}s | "
+                    f"本用户={user_elapsed:.1f}s | "
+                    f"平均用户={avg_per_user:.1f}s | "
                     f"总耗时={int(batch_elapsed)}s | "
                     f"ETA={eta_str}",
                     flush=True,

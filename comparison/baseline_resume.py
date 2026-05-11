@@ -10,6 +10,28 @@ def serialize_user_key(rec: Dict[str, Any]) -> str:
     return f"{rec.get('user_id')}\t{rec.get('community_id')}"
 
 
+def filter_users_per_community(
+    users: List[Dict[str, Any]],
+    max_per_community: int,
+) -> List[Dict[str, Any]]:
+    """
+    按输入顺序，每个 community_id 仅保留前 max_per_community 条（节省评测时间）。
+    max_per_community <= 0 时不裁剪。
+    """
+    if max_per_community <= 0:
+        return users
+    counts: Dict[Any, int] = {}
+    out: List[Dict[str, Any]] = []
+    for u in users:
+        cid = u.get("community_id")
+        n = counts.get(cid, 0)
+        if n >= max_per_community:
+            continue
+        counts[cid] = n + 1
+        out.append(u)
+    return out
+
+
 def load_completed_keys_per_method(
     *,
     separate_by_method: bool,

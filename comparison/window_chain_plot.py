@@ -22,17 +22,85 @@ def _percentile_linear(sorted_vals: List[float], p: float) -> float:
     return sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f])
 
 
+def _trim_flq_parallel_at_step(
+    fs: List[float],
+    ls: List[float],
+    qs: List[float],
+    *,
+    tail_fraction: float,
+    trim_sides: str,
+    basis: str,
+) -> Tuple[List[float], List[float], List[float]]:
+    """
+    单步、同步裁剪：按 basis 在当步 Q 上打分，去掉尾部比例的用户，再对 F/L/Q 用同一掩码保留。
+
+    basis:
+      - deviation: 分数 = Q - mean(Q)（该步），去掉相对均值最负/最正等尾部；
+      - value: 分数 = Q 本身，等价于按当步 Q 的分位去极值。
+
+    不写回磁盘；若样本过少或 tail=0 则原样返回。
+    """
+    n = len(qs)
+    if len(fs) != n or len(ls) != n or n == 0:
+        return list(fs), list(ls), list(qs)
+    t = max(0.0, min(0.45, float(tail_fraction)))
+    mode = str(trim_sides).lower().strip()
+    if mode not in ("both", "lower", "upper"):
+        mode = "both"
+    basis_l = str(basis).lower().strip()
+    if basis_l not in ("deviation", "value"):
+        basis_l = "deviation"
+    if t <= 0:
+        return list(fs), list(ls), list(qs)
+    if n < 3:
+        return list(fs), list(ls), list(qs)
+
+    if basis_l == "value":
+        scores = list(qs)
+    else:
+        mq = sum(qs) / n
+        scores = [q - mq for q in qs]
+
+    sorted_s = sorted(scores)
+    low_b = _percentile_linear(sorted_s, t * 100.0)
+    high_b = _percentile_linear(sorted_s, (1.0 - t) * 100.0)
+    keep: List[bool] = []
+    if mode == "lower":
+        keep = [not (s < low_b) for s in scores]
+    elif mode == "upper":
+        keep = [not (s > high_b) for s in scores]
+    else:
+        keep = [not (s < low_b or s > high_b) for s in scores]
+
+    nfs = [fs[i] for i in range(n) if keep[i]]
+    nls = [ls[i] for i in range(n) if keep[i]]
+    nqs = [qs[i] for i in range(n) if keep[i]]
+    if not nqs:
+        return list(fs), list(ls), list(qs)
+    return nfs, nls, nqs
+
+
 def filter_rows_for_plot_tails(
     rows: List[Dict[str, Any]],
     *,
     tail_fraction: float = 0.05,
     key: str = "mean_Q",
+    trim_sides: str = "both",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
-    作图专用：去掉 key 最低与最高各 tail_fraction 比例的用户行（默认各 5%，不删改磁盘上的 jsonl）。
-    无 key 或带 error 的行保留（不参与分位，照常参与后续聚合若仍在列表中——通常 error 行已在外部过滤）。
+    作图专用：按 trim_key 对用户排序后去掉尾部比例（不删改磁盘 jsonl）。
+
+    trim_sides:
+      - \"both\"（默认）：去掉最低与最高各 tail_fraction（与原逻辑一致）；
+      - \"lower\"：只去掉最低 tail_fraction（常用于去掉极差噪声、保留高分用户）；
+      - \"upper\"：只去掉最高 tail_fraction。
+
+    无 key 或带 error 的行保留（不参与分位）。
     """
     t = max(0.0, min(0.45, float(tail_fraction)))
+    mode = str(trim_sides).lower().strip()
+    if mode not in ("both", "lower", "upper"):
+        mode = "both"
     if t <= 0:
         return list(rows), {"trim_disabled": True, "kept": len(rows), "total_in": len(rows)}
 
@@ -58,13 +126,19 @@ def filter_rows_for_plot_tails(
     vals = sorted(x[1] for x in scored)
     low_b = _percentile_linear(vals, t * 100.0)
     high_b = _percentile_linear(vals, (1.0 - t) * 100.0)
-    drop = {i for i, v in scored if v < low_b or v > high_b}
+    if mode == "lower":
+        drop = {i for i, v in scored if v < low_b}
+    elif mode == "upper":
+        drop = {i for i, v in scored if v > high_b}
+    else:
+        drop = {i for i, v in scored if v < low_b or v > high_b}
     kept = [r for j, r in enumerate(rows) if j not in drop]
     meta = {
         "tail_fraction_each_side": t,
         "trim_key": key,
-        "low_bound": low_b,
-        "high_bound": high_b,
+        "trim_sides": mode,
+        "low_bound": low_b if mode in ("both", "lower") else None,
+        "high_bound": high_b if mode in ("both", "upper") else None,
         "dropped": len(drop),
         "kept_plot_users": len(kept),
         "total_in": len(rows),
@@ -76,11 +150,33 @@ def aggregate_flq_by_step(
     rows: List[Dict[str, Any]],
     *,
     method: Optional[str] = None,
+    stat: str = "mean",
+    step_trim_each_tail: float = 0.0,
+    step_trim_sides: str = "lower",
+    step_trim_basis: str = "deviation",
 ) -> Tuple[Dict[int, Dict[str, float]], int]:
     """
     返回 (step_index -> {"F","L","Q","n"}, 参与用户数)。
     method 为 None 时不按 method 过滤（应保证 rows 已只有一种 method）。
+    stat: mean（默认）或 median，逐步聚合时对各用户在当步的 F/L/Q 列表取均值或中位数。
+
+    step_trim_each_tail > 0 时：在**每个 step 内**单独裁剪（不整行删用户）——
+    按 step_trim_basis 用当步 Q（或 Q−该步均值）打分，去掉 trim_sides 对应尾部比例后，
+    再对 F/L/Q 取 mean/median；各步可保留不同用户数，\"n\" 为裁剪后该步样本数。
     """
+    stat = stat.lower().strip()
+    if stat not in ("mean", "median"):
+        stat = "mean"
+
+    def _agg(vals: List[float]) -> float:
+        if not vals:
+            return float("nan")
+        if stat == "median":
+            import statistics
+
+            return float(statistics.median(vals))
+        return sum(vals) / len(vals)
+
     step_vals: Dict[int, Dict[str, List[float]]] = defaultdict(
         lambda: {"F": [], "L": [], "Q": []}
     )
@@ -99,16 +195,31 @@ def aggregate_flq_by_step(
             step_vals[si]["L"].append(float(st["L"]))
             step_vals[si]["Q"].append(float(st["Q"]))
 
+    st_trim = float(step_trim_each_tail or 0.0)
+    use_step_trim = st_trim > 0.0
+
     means: Dict[int, Dict[str, float]] = {}
     for si in sorted(step_vals.keys()):
         bucket = step_vals[si]
-        n = len(bucket["Q"])
+        fs = list(bucket["F"])
+        ls = list(bucket["L"])
+        qs = list(bucket["Q"])
+        if use_step_trim:
+            fs, ls, qs = _trim_flq_parallel_at_step(
+                fs,
+                ls,
+                qs,
+                tail_fraction=st_trim,
+                trim_sides=str(step_trim_sides),
+                basis=str(step_trim_basis),
+            )
+        n = len(qs)
         if n == 0:
             continue
         means[si] = {
-            "F": sum(bucket["F"]) / n,
-            "L": sum(bucket["L"]) / n,
-            "Q": sum(bucket["Q"]) / n,
+            "F": _agg(fs),
+            "L": _agg(ls),
+            "Q": _agg(qs),
             "n": float(n),
         }
     return means, users

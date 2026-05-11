@@ -14,7 +14,7 @@
 - `src/`：DPO pipeline 核心代码
 - `process_dataset/`：数据处理脚本
 - `data/`：导出后的训练/测试/评估数据
-- `comparison/`：对比实验相关代码（窗口链基线跑 `python -m comparison.run_baseline_comparison`；**clasp_online** 可选写入 `profile_snapshots`，见 `comparison/README.md`）
+- `comparison/`：对比实验相关代码（窗口链基线跑 `python -m comparison.run_baseline_comparison`；**clasp_online** / **clasp_online_no_hist** 可选写入各自 `profile_snapshots`，见 `comparison/README.md`）。链上 F/L/Q 可视化：`python -m comparison.plot.visualize_baseline_chain <单个.jsonl> --out …`；**多方法并排对比**（行为社区、列为方法；**最右列为各方法 Q 随窗口的叠线对比**）：`--comparison-root output/comparison --results-stem baseline_chain_test_contiguous.jsonl --methods static_s0,prefix_refresh,clasp_online,clasp_online_no_hist --out grid.png`，或重复 `--method-jsonl NAME=PATH`。
 - `Action_model_experiment/`：动作模型基座 vs 微调对比（`run_action_model_eval.py`）
 - `scripts/`：辅助脚本
 - `saves/`：模型或中间结果保存目录
@@ -68,8 +68,8 @@ python process_dataset/community_data_splitter.py \
 ## DPO Pipeline 概览
 
 关键模块：
-- `src/config.py`：全局配置（模型路径、窗口参数、评分权重、DPO 阈值）
-- `src/window_splitter.py`：窗口切分器（默认 T=10；训练 `NUM_WINDOWS=5` 即 W0~W4；**窗口链评估**可 `--num-windows 6` 得到 W0~W5，对应 S0→W1 … S4→W5）
+- `src/config.py`：全局配置（模型路径、窗口参数、评分权重、DPO 阈值）。**多机动作推理**：`ACTION_API_BASE` 为主端点；`ACTION_API_EXTRA_BASES` 中可列其它 OpenAI 兼容 vLLM（如另一服务器的 `http://175.x.x.x:8005/v1`）。`invoke_action_llm` 在 `effective_action_api_bases()` 间**轮询**分配请求以提升吞吐；启动预检会对每个端点各测一遍连通性。
+- `src/window_splitter.py`：窗口切分器（默认 T=10；训练 `NUM_WINDOWS=5`；**窗口链** `--num-windows 6`）。可选 **`--split-mode monthly_chain`**：默认连续 **6** 个月 × 每月 **1** 窗 × 每窗 T 条（见 `MONTHLY_CHAIN_*`）；合并多来源输出可用 `scripts/build_monthly_chain_windowed.py`。
 - `src/scorer.py`：评分（F(S)、L(S)、Q(S)）
 - `src/action_predictor.py`：动作预测（决策类 + 内容生成类）
 - `src/profile_generator.py`：画像生成与精炼

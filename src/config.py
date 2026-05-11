@@ -31,8 +31,39 @@ PROFILE_MODEL = "gpt-4o-mini"
 ACTION_API_BASE = "http://localhost:8002/v1"
 ACTION_API_MODEL = "Meta-Llama-3-8B-Instruct"
 
+# 额外动作推理端点（OpenAI 兼容，一般为 vLLM），与 ACTION_API_BASE **轮询**分配请求以提升吞吐。
+# 可填多台机器；地址可写完整 URL 或 ``host:port``（自动补 ``http://`` 与 ``/v1``）。
+# 设为空元组 ``()`` 则仅使用 ACTION_API_BASE。
+ACTION_API_EXTRA_BASES: tuple[str, ...] = () #("http://175.6.27.230:8080/v1",)
+
+
+def _normalize_openai_v1_base(url: str) -> str:
+    """规范化动作 API 根路径（须以 /v1 结尾以匹配 OpenAI 客户端）。"""
+    u = (url or "").strip().rstrip("/")
+    if not u:
+        return ""
+    if not u.startswith("http://") and not u.startswith("https://"):
+        u = "http://" + u
+    if not u.endswith("/v1"):
+        u = u + "/v1"
+    return u
+
+
+def effective_action_api_bases() -> tuple[str, ...]:
+    """
+    参与轮询的动作 API 列表（去重、顺序：主端点优先，其余按 EXTRA 顺序）。
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in (ACTION_API_BASE, *ACTION_API_EXTRA_BASES):
+        u = _normalize_openai_v1_base(raw)
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return tuple(out) if out else ("http://127.0.0.1:8002/v1",)
+
 # comparison.run_baseline_comparison：按方法切换 vLLM 的 model 字段（须与各自服务端的 served model id 一致，可为本地路径）
-COMPARISON_BASELINE_VLLM_MODEL = "/data/LLM_models/Meta-Llama-3-8B-Instruct/"
+COMPARISON_BASELINE_VLLM_MODEL = "Meta-Llama-3-8B-Instruct"
 COMPARISON_CLASP_PROFILE_VLLM_MODEL = (
     "Meta-Llama-3-8B-Instruct-clasp-dpo-stage2"
 )
@@ -58,6 +89,10 @@ WINDOW_SIZE = 10       # 每个窗口的动作数
 NUM_WINDOWS = 5        # 训练 / DPO：W0 ~ W4（共 5 窗）
 # 窗口链评估：W0 建 S0，再 S0→W1 … S4→W5，共 6 窗、6*T 条动作
 NUM_WINDOWS_EVAL_CHAIN = 6
+# monthly_chain：连续 MONTHLY_CHAIN_NUM_MONTHS 个自然月，每月切 MONTHLY_CHAIN_WINDOWS_PER_MONTH 个时间窗，
+# 两者乘积须等于 NUM_WINDOWS_EVAL_CHAIN。
+MONTHLY_CHAIN_NUM_MONTHS = 6
+MONTHLY_CHAIN_WINDOWS_PER_MONTH = 1
 MIN_ACTIONS = WINDOW_SIZE * NUM_WINDOWS  # 用户至少需要 50 条动作（训练默认）
 
 # ============================================================================
@@ -91,7 +126,8 @@ ALPHA = 0.6
 # 当前数据里 L 已多为非负余弦相似度，再做 (L+1)/2 会压窄有效动态范围，一般保持 False。
 NORMALIZE_L_TO_UNIT = False
 
-# 作图（baseline 链 F/L/Q）：按用户 mean_Q 去掉最低/最高各该比例后再聚合折线；0=不去极值
+# 作图默认裁剪比例（run_baseline_comparison --plot / visualize 的 user 模式）；0=不去极值。
+# visualize 可用 --plot-trim-scope step 改为「每窗口内」按 Q 分位或 Q−步均值去尾后再聚合。
 PLOT_TRIM_EACH_TAIL = 0.05
 
 # ============================================================================
@@ -122,11 +158,17 @@ PROFILE_BEHAVIOR_TEXT_MAX_CHARS = 6000
 ACTION_PROMPT_HISTORY_MAX_CHARS = 6000
 # 动作预测 prompt 里 Target user profile 段上限（画像全文可能极长；与 ACTION_API_MAX_CONTEXT_TOKENS 配套）
 ACTION_PROMPT_PROFILE_MAX_CHARS = 3500
+
+# comparison history_only：不生成画像，把 W0..W_t 行为全文塞进「画像」槽位；控制单条与总长以免超动作 API 上下文
+# HISTORY_ONLY_HISTORY_BUDGET_CHARS=0 时按 ACTION_API_MAX_CONTEXT_TOKENS × CHARS_PER_TOKEN_ESTIMATE 减预留自动算
+HISTORY_ONLY_ACTION_LINE_MAX_CHARS = 0  # 0 表示用 TEXT_LONG
+HISTORY_ONLY_HISTORY_BUDGET_CHARS = 0
+HISTORY_ONLY_PROMPT_NON_HISTORY_RESERVE_CHARS = 4200
 # 画像精炼 prompt 两段的字符上限（与 PROFILE_BEHAVIOR_TEXT_MAX_CHARS 分开，避免 old+误差一起爆上下文）
 PROFILE_REFINEMENT_OLD_PERSONA_MAX_CHARS = 3500
 PROFILE_REFINEMENT_DISCREPANCY_MAX_CHARS = 3500
 TEMPERATURE_PROFILE = 0.8         # 画像候选多样性
-TEMPERATURE_ACTION = 0.3         # 动作预测倾向确定性
+TEMPERATURE_ACTION = 0         # 动作预测倾向确定性
 
 # ============================================================================
 # Debug：打印每次 LLM 请求/响应（由 --debug 或 DEBUG_LLM=True 开启）

@@ -23,7 +23,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import src.config as cfg
 from src.config import (
-    ACTION_API_BASE,
     ACTION_API_MODEL,
     ALPHA,
     ABS_DELTA,
@@ -174,7 +173,7 @@ def _check_api(api_base: str, model_name: str, api_key: str = "not-needed", labe
         client = OpenAI(base_url=api_base, api_key=api_key, timeout=15)
         resp = client.chat.completions.create(
             model=model_name,
-            messages=[{"role": "user", "content": "Hello!"}],
+            messages=[{"role": "user", "content": "Hi~Bluesky!"}],
             max_tokens=5,
             temperature=0.01,
         )
@@ -204,8 +203,8 @@ def preflight_check(comparison_methods: Optional[List[str]] = None) -> bool:
 
     comparison_methods:
         若提供（如 run_baseline_comparison 的 --methods），则按 window_chain 实际使用的
-        model 名做探测：基线三法用 COMPARISON_BASELINE_VLLM_MODEL；clasp_online 用
-        COMPARISON_CLASP_PROFILE / ACTION。若同时选多类，会各测一遍。
+        model 名做探测：需画像的基线（static/prefix/incremental）用 COMPARISON_BASELINE_VLLM_MODEL 测画像+动作；
+        仅 history_only 时只测动作端同模型；clasp_online 系用 COMPARISON_CLASP_PROFILE / ACTION。
         若未提供，则仍用 config 的 PROFILE_API_MODEL / ACTION_API_MODEL（DPO 主流程等）。
     """
     print("\n[Preflight] 模型连通性检测 ...", flush=True)
@@ -214,28 +213,32 @@ def preflight_check(comparison_methods: Optional[List[str]] = None) -> bool:
 
     if comparison_methods is not None and len(comparison_methods) > 0:
         ms = set(comparison_methods)
-        # 与 comparison/window_chain_eval 中非 clasp_online 的方法一致
-        need_baseline = bool(
+        need_profile_baseline = bool(
             ms & {"static_s0", "prefix_refresh", "incremental_persona"}
         )
-        need_clasp = "clasp_online" in ms
+        need_history_only = bool(ms & {"history_only"})
+        need_clasp = bool(ms & {"clasp_online", "clasp_online_no_hist"})
 
-        if need_baseline:
+        if need_profile_baseline or need_history_only:
             bp = str(cfg.COMPARISON_BASELINE_VLLM_MODEL)
-            api_ok.append(
-                _check_api(
-                    PROFILE_API_BASE,
-                    bp,
-                    label=f"画像 vLLM（基线方法 static/prefix/incremental，model={bp}）",
+            if need_profile_baseline:
+                api_ok.append(
+                    _check_api(
+                        PROFILE_API_BASE,
+                        bp,
+                        label=f"画像 vLLM（基线方法 static/prefix/incremental，model={bp}）",
+                    )
                 )
-            )
-            api_ok.append(
-                _check_api(
-                    ACTION_API_BASE,
-                    bp,
-                    label=f"动作 vLLM（基线方法，model={bp}）",
+            for ab in cfg.effective_action_api_bases():
+                api_ok.append(
+                    _check_api(
+                        ab,
+                        bp,
+                        label=(
+                            f"动作 vLLM（基线方法{'/history_only' if need_history_only else ''}，model={bp}）@ {ab}"
+                        ),
+                    )
                 )
-            )
         if need_clasp:
             cp = str(cfg.COMPARISON_CLASP_PROFILE_VLLM_MODEL)
             ca = str(cfg.COMPARISON_CLASP_ACTION_VLLM_MODEL)
@@ -243,32 +246,43 @@ def preflight_check(comparison_methods: Optional[List[str]] = None) -> bool:
                 _check_api(
                     PROFILE_API_BASE,
                     cp,
-                    label=f"画像 vLLM（clasp_online，model={cp}）",
+                    label=f"画像 vLLM（clasp_online / clasp_online_no_hist，model={cp}）",
                 )
             )
-            api_ok.append(
-                _check_api(
-                    ACTION_API_BASE,
-                    ca,
-                    label=f"动作 vLLM（clasp_online，model={ca}）",
+            for ab in cfg.effective_action_api_bases():
+                api_ok.append(
+                    _check_api(
+                        ab,
+                        ca,
+                        label=f"动作 vLLM（clasp_online / clasp_online_no_hist，model={ca}）@ {ab}",
+                    )
                 )
-            )
 
-        if not need_baseline and not need_clasp:
+        if not need_profile_baseline and not need_history_only and not need_clasp:
             api_ok.append(
                 _check_api(PROFILE_API_BASE, PROFILE_API_MODEL, label="画像生成模型")
             )
-            api_ok.append(
-                _check_api(ACTION_API_BASE, ACTION_API_MODEL, label="动作预测模型")
-            )
+            for ab in cfg.effective_action_api_bases():
+                api_ok.append(
+                    _check_api(
+                        ab,
+                        ACTION_API_MODEL,
+                        label=f"动作预测模型 @ {ab}",
+                    )
+                )
     else:
         ok1 = _check_api(
             PROFILE_API_BASE, PROFILE_API_MODEL, label="画像生成模型"
         )
-        ok2 = _check_api(
-            ACTION_API_BASE, ACTION_API_MODEL, label="动作预测模型"
-        )
-        api_ok.extend([ok1, ok2])
+        api_ok.append(ok1)
+        for ab in cfg.effective_action_api_bases():
+            api_ok.append(
+                _check_api(
+                    ab,
+                    ACTION_API_MODEL,
+                    label=f"动作预测模型 @ {ab}",
+                )
+            )
 
     ok3 = _check_local_path(SENTENCE_TRANSFORMER_MODEL, "Sentence Transformer")
     all_ok = all(api_ok) and ok3

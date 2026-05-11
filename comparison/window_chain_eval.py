@@ -9,11 +9,12 @@
   N=6（W0..W5，共 6*T 条动作）时共 5 个采样点，至 S4 预测 W5。
 - 每步结束后（非最后一步）若策略需要更新画像：
   - clasp_online：按预测误差精炼；每步动作模型只调用一轮 predict。
+  - clasp_online_no_hist：与 clasp_online 相同画像与模型路由，但动作 prompt **不**含观测历史（消融）。
   - prefix_refresh：用已观测 W0..W_{t+1} 重算初始画像；
   - static_s0：画像保持 S0。
   - incremental_persona：用 S_{t-1} + **当前窗**短期行为（无预测误差）精炼得到 S_t。
-  - s0_sliding_history：画像固定 S0，预测时在 prompt 中附加 **当前窗**行为全文。
-  - user_full_history：无单独长期画像，仅用 **W0..W_t 拼接**的全量行为块驱动预测。
+  - history_only：不调用画像模型；每步将 **W0..W_t** 已观测动作拼接写入动作 prompt 的「画像」槽位，
+    且关闭 Recent user actions 中的本窗滑窗（避免重复）；总长与单行长度受 config 预算约束以适配动作 API 上下文。
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ import src.config as cfg
 
 from src.action_predictor import (
     build_behavior_discrepancies,
+    format_action,
     predict_actions_for_window,
 )
 from src.config import ALPHA, DPO_WORKERS, TEMPERATURE_ACTION
@@ -209,9 +211,14 @@ VALID_METHODS = frozenset(
         "static_s0",
         "prefix_refresh",
         "clasp_online",
+        "clasp_online_no_hist",
         "incremental_persona",
+        "history_only",
     }
 )
+
+# 与 clasp_online 共用 Clasp 侧 vLLM、预测一次 preds 再精炼的协议
+CLASP_ONLINE_VARIANTS = frozenset({"clasp_online", "clasp_online_no_hist"})
 
 
 def _sorted_window_keys(windows: Dict[str, Any]) -> List[str]:
@@ -221,17 +228,29 @@ def _sorted_window_keys(windows: Dict[str, Any]) -> List[str]:
     )
 
 
-def _append_clasp_profile_snapshot(
-    snap_dir: Path,
-    uid: Any,
-    cid: Any,
-    record: Dict[str, Any],
-) -> None:
-    """将一行 JSON 追加到该用户的 clasp_online 画像快照文件。"""
-    snap_dir.mkdir(parents=True, exist_ok=True)
-    fn = snap_dir / f"user_{uid}_c_{cid}.jsonl"
-    with fn.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+# clasp_online 画像快照：写入 profile_snapshot_dir / profiles.jsonl（单行 JSON，多进程追加时用 flock）
+CLASP_PROFILE_SNAPSHOT_FILENAME = "profiles.jsonl"
+
+
+def _append_clasp_profile_snapshot(snap_file: Path, record: Dict[str, Any]) -> None:
+    """追加一行 JSON 到统一的画像快照文件（POSIX 下 flock 避免并行写入交错）。"""
+    snap_file.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False) + "\n"
+    try:
+        import fcntl  # type: ignore
+    except ImportError:
+        fcntl = None
+    if fcntl is not None:
+        with snap_file.open("a", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write(line)
+                f.flush()
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    else:
+        with snap_file.open("a", encoding="utf-8") as f:
+            f.write(line)
 
 
 def _concat_windows(
@@ -245,6 +264,41 @@ def _concat_windows(
     for i in range(start_i, end_i + 1):
         out.extend(windows[keys[i]])
     return out
+
+
+def _history_only_history_budget_chars() -> int:
+    explicit = int(getattr(cfg, "HISTORY_ONLY_HISTORY_BUDGET_CHARS", 0) or 0)
+    if explicit > 0:
+        return explicit
+    ctx = int(getattr(cfg, "ACTION_API_MAX_CONTEXT_TOKENS", 8192))
+    cpt = float(getattr(cfg, "ACTION_API_CHARS_PER_TOKEN_ESTIMATE", 3.0) or 3.0)
+    cpt = max(1.5, min(cpt, 8.0))
+    est_chars_budget = int(ctx * cpt)
+    reserve = int(getattr(cfg, "HISTORY_ONLY_PROMPT_NON_HISTORY_RESERVE_CHARS", 4200) or 4200)
+    return max(1200, est_chars_budget - reserve)
+
+
+def _build_history_only_profile_text(prior_actions: List[Dict]) -> str:
+    """
+    将截至当前步之前的全部已观测动作写入「Target user profile」段（无蒸馏画像）。
+    单行与总长截断：先按条 cap，再对拼接正文做头尾截断以适配动作 API 上下文。
+    """
+    line_cap = int(getattr(cfg, "HISTORY_ONLY_ACTION_LINE_MAX_CHARS", 0) or 0)
+    if line_cap <= 0:
+        line_cap = int(getattr(cfg, "TEXT_LONG", 500) or 500)
+    lines: List[str] = []
+    for a in prior_actions:
+        ln = format_action(a, include_timestamp=False)
+        if len(ln) > line_cap:
+            ln = ln[: max(1, line_cap - 3)] + "..."
+        lines.append(ln)
+    body = "\n".join(lines) if lines else "(no prior actions observed)"
+    body = truncate_behavior_plaintext(body, _history_only_history_budget_chars())
+    hdr = (
+        "[No distilled persona — baseline uses raw chronological action history only.]\n"
+        "### All observed user actions up to the prediction point (oldest → newest):\n"
+    )
+    return (hdr + body).strip()
 
 
 def _incremental_refine_block(hist_actions: List[Dict], window_key: str) -> str:
@@ -264,7 +318,7 @@ def _comparison_vllm_model_scope(method: str):
     """
     old_p, old_a = cfg.PROFILE_API_MODEL, cfg.ACTION_API_MODEL
     try:
-        if method == "clasp_online":
+        if method in CLASP_ONLINE_VARIANTS:
             cfg.PROFILE_API_MODEL = cfg.COMPARISON_CLASP_PROFILE_VLLM_MODEL
             cfg.ACTION_API_MODEL = cfg.COMPARISON_CLASP_ACTION_VLLM_MODEL
         else:
@@ -289,6 +343,7 @@ def evaluate_user_window_chain(
     always_accept_refinement: bool = False,
     profile_snapshot_dir: Optional[Path] = None,
     action_prompt_include_observed_history: bool = True,
+    enable_three_window_evaluation: bool = True,
 ) -> Dict[str, Any]:
     """
     对单条窗口化用户记录执行窗口链评估。
@@ -298,15 +353,21 @@ def evaluate_user_window_chain(
       - prefix_refresh: 每步预测后，用已观测的 W0..W_{t+1} 重算初始画像再进入下一步。
       - clasp_online: 每步按误差精炼画像；默认 refinement_variants=1。
         默认与旧画像比 Q 取优；always_accept_refinement=True 时总是采用新精炼（多份时取首个非空）。
+      - clasp_online_no_hist: 与 clasp_online 相同，但动作侧 **强制** 不附带观测历史
+        （等价于全局 ``action_prompt_include_observed_history=False``，且不受调用方 True 覆盖）。
       - incremental_persona: 每步后用 S_{t-1} 与当前窗行为（无误差信号）单次精炼更新画像。
+      - history_only: **不**调用画像模型；每步将 **W0..W_t** 全部已观测动作拼入动作 prompt 的「画像」槽位，
+        并关闭 Recent user actions 滑窗（避免与本窗重复）；总长与单行长度由 ``HISTORY_ONLY_*`` 配置约束。
 
-    注意：所有方法都使用统一的历史输入机制（profile_suffix），确保公平对比。
+    注意：除 history_only 与 clasp_online_no_hist 外，各方法默认使用统一 profile_suffix 历史机制；
     若 action_prompt_include_observed_history=False，则动作 API prompt 中不再附带观测到的历史动作
     （既不拼 profile_suffix，也不在 Recent user actions 中使用滑窗），用于消融实验。
 
     profile_snapshot_dir:
-      仅当 method 为 clasp_online 且目录非空时，写入每用户一个 ``user_<id>_c_<cid>.jsonl``
-      （含 W0 初始一行 + 每链一步一行）；其它 method 忽略此参数。
+      仅当 method 为 clasp_online / clasp_online_no_hist 且目录非空时，向该目录下 ``profiles.jsonl`` 追加行；
+      每行含 user_id、phase、step_index、``profile`` 全文与 ``profile_length``；其它 method 忽略此参数。
+    enable_three_window_evaluation:
+      False 时不做链末三窗口对比（past/current/future 上旧 vs 新画像），可显著减少动作 API 调用。
     """
     uid = user_record.get("user_id")
     cid = user_record.get("community_id")
@@ -332,48 +393,55 @@ def evaluate_user_window_chain(
         }
 
     snap_dir: Optional[Path] = None
-    if method == "clasp_online" and profile_snapshot_dir is not None:
+    snap_file: Optional[Path] = None
+    if method in CLASP_ONLINE_VARIANTS and profile_snapshot_dir is not None:
         snap_dir = Path(profile_snapshot_dir).resolve()
+        snap_file = snap_dir / CLASP_PROFILE_SNAPSHOT_FILENAME
+
+    include_obs_history = bool(action_prompt_include_observed_history)
+    if method == "clasp_online_no_hist" or method == "history_only":
+        include_obs_history = False
 
     with _comparison_vllm_model_scope(method):
-        if snap_dir is not None:
-            snap_dir.mkdir(parents=True, exist_ok=True)
-            (snap_dir / f"user_{uid}_c_{cid}.jsonl").unlink(missing_ok=True)
+        if method == "history_only":
+            s0_fixed = ""
+            profile = ""
+        else:
+            w0_actions = windows[keys[0]]
+            s0_fixed = generate_initial_profile(profile_model, profile_tokenizer, w0_actions)
+            profile = s0_fixed
 
-        w0_actions = windows[keys[0]]
-        s0_fixed = generate_initial_profile(profile_model, profile_tokenizer, w0_actions)
-        profile = s0_fixed
-
-        if snap_dir is not None:
-            _append_clasp_profile_snapshot(
-                snap_dir,
-                uid,
-                cid,
-                {
-                    "user_id": uid,
-                    "community_id": cid,
-                    "method": method,
-                    "phase": "after_W0_initial",
-                    "step_index": None,
-                    "history_window": None,
-                    "target_window": None,
-                    "profile": s0_fixed,
-                    "profile_length": len(s0_fixed or ""),
-                },
-            )
+            if snap_file is not None:
+                _append_clasp_profile_snapshot(
+                    snap_file,
+                    {
+                        "user_id": uid,
+                        "community_id": cid,
+                        "method": method,
+                        "phase": "after_W0_initial",
+                        "step_index": None,
+                        "history_window": None,
+                        "target_window": None,
+                        "profile": s0_fixed,
+                        "profile_length": len(s0_fixed or ""),
+                    },
+                )
     
         steps_out: List[Dict[str, Any]] = []
     
         n_keys = len(keys)
         for step_idx in range(n_keys - 1):
-            profile_at_step_start = profile
             # 协议：hist = 已观测窗 W_t，targets = 待预测窗 W_{t+1}；不得把 targets 写入 profile_suffix。
             hist = windows[keys[step_idx]]
             targets = windows[keys[step_idx + 1]]
             wkey = keys[step_idx]
     
-            # === 统一历史机制：所有方法都使用相同的 profile_suffix（可关闭以仅保留画像+scenario）===
-            if action_prompt_include_observed_history:
+            # === 历史输入：默认 profile_suffix + 滑窗；history_only 用 W0..W_t 全文进画像槽 ===
+            if method == "history_only":
+                prior_concat = _concat_windows(windows, keys, 0, step_idx)
+                eval_profile = _build_history_only_profile_text(prior_concat)
+                profile_suffix = None
+            elif include_obs_history:
                 profile_suffix = (
                     f"### Recent behaviors (observed window {wkey})\n"
                     + format_behavior_data(hist)
@@ -385,16 +453,15 @@ def evaluate_user_window_chain(
                     )
             else:
                 profile_suffix = None
-    
-            # 根据方法设置画像
+
             if method == "static_s0":
                 eval_profile = s0_fixed
-            else:
+            elif method != "history_only":
                 eval_profile = profile
     
             # clasp_online：本步只预测一次，评分与 discrepancy 共用同一组 preds（避免重复打动作 API）
             preds_for_refine: Optional[List[Dict]] = None
-            if method == "clasp_online":
+            if method in CLASP_ONLINE_VARIANTS:
                 preds_for_refine = predict_actions_for_window(
                     action_model,
                     action_tokenizer,
@@ -403,7 +470,7 @@ def evaluate_user_window_chain(
                     targets,
                     temperature=TEMPERATURE_ACTION,
                     profile_suffix=profile_suffix,
-                    include_observed_history=action_prompt_include_observed_history,
+                    include_observed_history=include_obs_history,
                 )
                 f_s, l_s, q_s = evaluate_predictions(
                     preds_for_refine, targets, semantic_scorer, ALPHA
@@ -417,18 +484,19 @@ def evaluate_user_window_chain(
                     action_tokenizer,
                     semantic_scorer,
                     profile_suffix=profile_suffix,
-                    include_observed_history=action_prompt_include_observed_history,
+                    include_observed_history=include_obs_history,
                 )
-            steps_out.append(
-                {
-                    "step_index": step_idx,
-                    "history_window": keys[step_idx],
-                    "target_window": keys[step_idx + 1],
-                    "F": f_s,
-                    "L": l_s,
-                    "Q": q_s,
-                }
-            )
+            step_rec: Dict[str, Any] = {
+                "step_index": step_idx,
+                "history_window": keys[step_idx],
+                "target_window": keys[step_idx + 1],
+                "F": f_s,
+                "L": l_s,
+                "Q": q_s,
+            }
+            if method == "history_only":
+                step_rec["history_only_context_chars"] = len(eval_profile or "")
+            steps_out.append(step_rec)
     
             # 判断是否是最后一步
             is_last = step_idx >= n_keys - 2
@@ -440,7 +508,9 @@ def evaluate_user_window_chain(
             if method == "static_s0":
                 # static_s0: 画像不变
                 pass
-    
+
+            elif method == "history_only":
+                pass
             elif method == "prefix_refresh":
                 prefix_actions = _concat_windows(windows, keys, 0, step_idx + 1)
                 profile = generate_initial_profile(
@@ -460,7 +530,7 @@ def evaluate_user_window_chain(
                 if candidates and (candidates[0] or "").strip():
                     profile = candidates[0]
     
-            elif method == "clasp_online":
+            elif method in CLASP_ONLINE_VARIANTS:
                     discrepancies = build_behavior_discrepancies(
                         preds_for_refine, targets, hist
                     )
@@ -497,7 +567,7 @@ def evaluate_user_window_chain(
                         if step_idx + 2 < len(keys):
                             next_hist = targets
                             next_targets = windows[keys[step_idx + 2]]
-                            if action_prompt_include_observed_history:
+                            if include_obs_history:
                                 next_suffix = (
                                     f"### Recent behaviors (observed window {keys[step_idx + 1]})\n"
                                     + format_behavior_data(next_hist)
@@ -520,7 +590,7 @@ def evaluate_user_window_chain(
                                     action_tokenizer,
                                     semantic_scorer,
                                     profile_suffix=next_suffix,
-                                    include_observed_history=action_prompt_include_observed_history,
+                                    include_observed_history=include_obs_history,
                                 )
                                 candidate_scores.append({
                                     "index": idx,
@@ -548,11 +618,9 @@ def evaluate_user_window_chain(
                     steps_out[-1]["profile_length"] = len(profile)
                     steps_out[-1]["num_candidates"] = len(candidates)
     
-            if snap_dir is not None:
+            if snap_file is not None:
                 _append_clasp_profile_snapshot(
-                    snap_dir,
-                    uid,
-                    cid,
+                    snap_file,
                     {
                         "user_id": uid,
                         "community_id": cid,
@@ -561,10 +629,8 @@ def evaluate_user_window_chain(
                         "step_index": step_idx,
                         "history_window": keys[step_idx],
                         "target_window": keys[step_idx + 1],
-                        "profile_before_prediction": profile_at_step_start,
-                        "profile_after_step": profile,
-                        "profile_length_before": len(profile_at_step_start or ""),
-                        "profile_length_after": len(profile or ""),
+                        "profile": profile,
+                        "profile_length": len(profile or ""),
                     },
                 )
 
@@ -576,13 +642,14 @@ def evaluate_user_window_chain(
             # 记录画像变化前后在三个窗口上的表现
             should_evaluate_three_windows = False
     
-            if method == "static_s0":
-                # static_s0: 只在最后一步记录一次（作为基线）
-                should_evaluate_three_windows = is_last_step
-            else:
-                # 其他方法: 只在最后一步且画像有更新时记录
-                if is_last_step and old_profile != profile:
-                    should_evaluate_three_windows = True
+            if enable_three_window_evaluation:
+                if method == "static_s0":
+                    # static_s0: 只在最后一步记录一次（作为基线）
+                    should_evaluate_three_windows = is_last_step
+                else:
+                    # 其他方法: 只在最后一步且画像有更新时记录（history_only 画像占位不变，不会触发）
+                    if is_last_step and old_profile != profile:
+                        should_evaluate_three_windows = True
     
             if should_evaluate_three_windows:
                 # 传入当前步骤的评估结果，可以复用作为未来窗口的 new_profile 评估
@@ -596,7 +663,7 @@ def evaluate_user_window_chain(
                     action_tokenizer=action_tokenizer,
                     semantic_scorer=semantic_scorer,
                     current_step_scores={"F": f_s, "L": l_s, "Q": q_s},
-                    action_prompt_include_observed_history=action_prompt_include_observed_history,
+                    action_prompt_include_observed_history=include_obs_history,
                 )
                 steps_out[-1]["three_window_evaluation"] = three_window_eval
                 steps_out[-1]["profile_changed"] = (old_profile != profile)
@@ -613,7 +680,7 @@ def evaluate_user_window_chain(
             "window_keys": keys,
             "refinement_variants": refinement_variants,
             "always_accept_refinement": always_accept_refinement,
-            "action_prompt_include_observed_history": action_prompt_include_observed_history,
+            "action_prompt_include_observed_history": include_obs_history,
             "steps": steps_out,
             "mean_Q": mean_q,
             "mean_F": mean_f,

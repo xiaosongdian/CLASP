@@ -5,6 +5,7 @@
 """
 
 import re
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import src.config as cfg
@@ -15,8 +16,24 @@ from src.config import (
     TEST_API_BASE,
     TEST_API_KEY,
     TEST_API_MODEL,
-    ACTION_API_BASE,
 )
+
+_ACTION_API_RR_LOCK = threading.Lock()
+_ACTION_API_RR_IDX = 0
+
+
+def _pick_action_api_base() -> str:
+    """从 effective_action_api_bases() 中轮询选一个端点（线程安全）。"""
+    global _ACTION_API_RR_IDX
+    bases = cfg.effective_action_api_bases()
+    if not bases:
+        return "http://127.0.0.1:8002/v1"
+    if len(bases) == 1:
+        return bases[0]
+    with _ACTION_API_RR_LOCK:
+        b = bases[_ACTION_API_RR_IDX % len(bases)]
+        _ACTION_API_RR_IDX += 1
+        return b
 from src.prompts import (
     AVAILABLE_ACTIONS,
     CONTENT_INPUT_TEMPLATE,
@@ -509,7 +526,7 @@ def invoke_action_llm(
         )
     if USE_VLLM_API or model is None or tokenizer is None:
         return call_llm_api(
-            ACTION_API_BASE,
+            _pick_action_api_base(),
             cfg.ACTION_API_MODEL,
             instruction,
             input_text,

@@ -56,9 +56,31 @@ def main() -> None:
         default=None,
         metavar="P",
         help=(
-            "作图聚合前按 mean_Q 去掉最低/最高各该比例；0=关闭；"
+            "作图聚合前按 mean_Q 裁剪尾部该比例；0=关闭；"
+            "双侧默认最低/最高各 P；单侧见 --plot-trim-sides；"
             f"省略则用 config.PLOT_TRIM_EACH_TAIL（当前 {CFG_PLOT_TRIM}）；不改 jsonl"
         ),
+    )
+    p.add_argument(
+        "--plot-trim-sides",
+        choices=("both", "lower", "upper"),
+        default="both",
+        help=(
+            "与 --plot-trim-each-tail 配合：both=最低与最高各去掉该比例；"
+            "lower=只去掉最低比例；upper=只去掉最高比例"
+        ),
+    )
+    p.add_argument(
+        "--plot-trim-scope",
+        choices=("user", "step"),
+        default="user",
+        help="user=按 mean_Q 整行裁剪；step=每步内裁剪后再聚合",
+    )
+    p.add_argument(
+        "--step-trim-basis",
+        choices=("deviation", "value"),
+        default="deviation",
+        help="plot-trim-scope=step 时：deviation=Q−当步均值；value=当步 Q 分位",
     )
     args = p.parse_args()
     trim_tail = CFG_PLOT_TRIM if args.plot_trim_each_tail is None else float(args.plot_trim_each_tail)
@@ -83,9 +105,12 @@ def main() -> None:
             print(f"[skip] {m}: 无有效行", flush=True)
             continue
         sub_plot = sub
-        if trim_tail and trim_tail > 0:
+        if trim_tail and trim_tail > 0 and str(args.plot_trim_scope).lower() == "user":
             sub_plot, tmeta = filter_rows_for_plot_tails(
-                sub, tail_fraction=trim_tail, key="mean_Q"
+                sub,
+                tail_fraction=trim_tail,
+                key="mean_Q",
+                trim_sides=str(args.plot_trim_sides),
             )
             print(
                 f"=== {m} | 作图用户(去极值后)={len(sub_plot)}/{len(sub)} | "
@@ -94,9 +119,26 @@ def main() -> None:
             )
             if not sub_plot:
                 sub_plot = sub
+        elif trim_tail and trim_tail > 0 and str(args.plot_trim_scope).lower() == "step":
+            print(
+                f"=== {m} | per-step trim P={trim_tail} sides={args.plot_trim_sides} "
+                f"basis={args.step_trim_basis} | users={len(sub)} ===",
+                flush=True,
+            )
         else:
             print(f"=== {m} | 作图用户={len(sub)}（未去极值）===", flush=True)
-        means, n_users = aggregate_flq_by_step(sub_plot, method=None)
+        st_tail = (
+            float(trim_tail)
+            if trim_tail and trim_tail > 0 and str(args.plot_trim_scope).lower() == "step"
+            else 0.0
+        )
+        means, n_users = aggregate_flq_by_step(
+            sub_plot,
+            method=None,
+            step_trim_each_tail=st_tail,
+            step_trim_sides=str(args.plot_trim_sides),
+            step_trim_basis=str(args.step_trim_basis),
+        )
         print_step_table(means, label=m)
         steps_sorted = sorted(means.keys())
         labels: list[str] = []
