@@ -15,6 +15,8 @@
 
 支持 --watch 轮询 jsonl（单文件模式；网格模式会轮询所涉全部 jsonl）。
 
+可加 ``--export-stats-csv [PATH]``：在写出 PNG 后导出与图一致的链上聚合表（UTF-8 BOM）；不写路径时默认为 ``<out 主名>_plot_stats.csv``。网格模式为每个 (community, method, step) 一行 F/L/Q 及基线；单文件多社区模式为每个 (community, step) 一行。
+
 输出文件：**始终一个 PNG**（`--out`）；多个社区时在同一图中 **纵向子图**（每社区一行）。
 
 **多方法对比（列为方法、行为社区）**：使用 `--comparison-root` + `--results-stem` + `--methods`，或重复传入 `--method-jsonl NAME=PATH`；**最右一列**为同社区下 **各方法链上 Q 随窗口变化** 的折线叠图（仅 Q，图例为方法名）。可加入 **`clasp_online_no_hist`** 与 **`clasp_online`** 并列对比（需先分别跑出对应子目录下的 jsonl）。
@@ -39,7 +41,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -298,6 +302,50 @@ def render_figure_by_community(
     return fig
 
 
+def _csv_float_cell(v: Any) -> str:
+    if v is None or v == "":
+        return ""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if isinstance(f, float) and (math.isnan(f) or math.isinf(f)):
+        return "nan"
+    return f"{f:.10g}"
+
+
+def _write_chain_step_stats_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
+    """链上逐步 F/L/Q + 基线列；与 visualize 子图曲线取值一致。"""
+    if not rows:
+        return
+    fieldnames = [
+        "community_id",
+        "method",
+        "step_index",
+        "step_order",
+        "target_window_label",
+        "n_users",
+        "F",
+        "L",
+        "Q",
+        "baseline_window",
+        "baseline_F",
+        "baseline_L",
+        "baseline_Q",
+        "aggregate",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            out = {k: r.get(k, "") for k in fieldnames}
+            for k in ("F", "L", "Q", "baseline_F", "baseline_L", "baseline_Q"):
+                if k in out and out[k] != "":
+                    out[k] = _csv_float_cell(out[k])
+            w.writerow(out)
+
+
 def run_multi_method_grid(
     method_paths: Dict[str, Path],
     out: Path,
@@ -313,6 +361,7 @@ def run_multi_method_grid(
     aggregate: str = "mean",
     plot_trim_scope: str = "user",
     step_trim_basis: str = "deviation",
+    export_stats_csv: Optional[Path] = None,
 ) -> None:
     """
     多方法 × 多社区：行为社区、方法为列；每格画该 (community, method) 的链上 F/L/Q。
@@ -390,6 +439,7 @@ def run_multi_method_grid(
     fig_w = max(14, 4.0 * n_m + 3.6)
     fig_h = max(8, 2.85 * n_r)
     fig, axes = plt.subplots(n_r, n_c_grid, figsize=(fig_w, fig_h), squeeze=False)
+    step_csv_rows: List[Dict[str, Any]] = []
     for ii in range(1, n_r):
         axes[ii, n_m].sharey(axes[0, n_m])
 
@@ -424,6 +474,35 @@ def run_multi_method_grid(
             if not disable_baseline and steps_sorted:
                 baseline_flq = _baseline_flq_at_target(
                     means, steps_sorted, labels, baseline_window
+                )
+
+            if disable_baseline or baseline_flq is None:
+                bw_s = ""
+                bfp = blp = bqp = ""
+            else:
+                bFa, bLa, bQa = baseline_flq
+                bw_s = str(baseline_window)
+                bfp, blp, bqp = bFa, bLa, bQa
+            for idx, skey in enumerate(steps_sorted):
+                wl = labels[idx] if idx < len(labels) else f"step{skey}"
+                mm = means[skey]
+                step_csv_rows.append(
+                    {
+                        "community_id": _comm_slug(cid),
+                        "method": meth,
+                        "step_index": idx,
+                        "step_order": int(skey),
+                        "target_window_label": wl,
+                        "n_users": int(mm.get("n", 0) or 0),
+                        "F": float(mm["F"]),
+                        "L": float(mm["L"]),
+                        "Q": float(mm["Q"]),
+                        "baseline_window": bw_s,
+                        "baseline_F": bfp,
+                        "baseline_L": blp,
+                        "baseline_Q": bqp,
+                        "aggregate": agg,
+                    }
                 )
 
             ylb = ylab_left if j == 0 else ""
@@ -530,6 +609,13 @@ def run_multi_method_grid(
     fig.savefig(out_p, dpi=150)
     plt.close(fig)
 
+    if export_stats_csv is not None:
+        if step_csv_rows:
+            _write_chain_step_stats_csv(export_stats_csv, step_csv_rows)
+            print(f"[viz] 已写入统计 CSV {export_stats_csv}", flush=True)
+        else:
+            print("[viz] 无链上阶梯行，跳过 CSV 导出", flush=True)
+
     print(
         f"[viz] 已写入网格图 {n_r} 社区 × {n_m} 方法 + Q 对比列 -> {out_p}",
         flush=True,
@@ -551,6 +637,7 @@ def run_once(
     aggregate: str = "mean",
     plot_trim_scope: str = "user",
     step_trim_basis: str = "deviation",
+    export_stats_csv: Optional[Path] = None,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -605,6 +692,8 @@ def run_once(
         )
 
     panel_args: List[Dict[str, Any]] = []
+    single_file_csv_rows: List[Dict[str, Any]] = []
+    meth_label = (method or jsonl.stem).strip() or "unknown"
     for cid in comm_ids:
         sub = by_comm[cid]
         means, n_chain = aggregate_flq_by_step(
@@ -625,6 +714,39 @@ def run_once(
                 )
 
         comm_label = _comm_slug(cid)
+        if export_stats_csv is not None and steps_sorted:
+            for si, s in enumerate(steps_sorted):
+                m = means[s]
+                wl = labels[si] if si < len(labels) else f"step{s}"
+                n_u = int(m.get("n", 0) or 0)
+                if disable_baseline or baseline_flq is None:
+                    bw_s = ""
+                    bfp = blp = bqp = ""
+                else:
+                    bF, bL, bQ = baseline_flq
+                    bw_s = str(baseline_window)
+                    bfp = _csv_float_cell(bF)
+                    blp = _csv_float_cell(bL)
+                    bqp = _csv_float_cell(bQ)
+                single_file_csv_rows.append(
+                    {
+                        "community_id": str(cid),
+                        "method": meth_label,
+                        "step_index": si,
+                        "step_order": int(s),
+                        "target_window_label": str(wl),
+                        "n_users": n_u,
+                        "F": _csv_float_cell(m.get("F")),
+                        "L": _csv_float_cell(m.get("L")),
+                        "Q": _csv_float_cell(m.get("Q")),
+                        "baseline_window": bw_s,
+                        "baseline_F": bfp,
+                        "baseline_L": blp,
+                        "baseline_Q": bqp,
+                        "aggregate": agg,
+                    }
+                )
+
         panel_args.append(
             {
                 "means": means,
@@ -664,6 +786,19 @@ def run_once(
         f"[viz] 已写入单图（{len(comm_ids)} 个社区子图）-> {out_p}",
         flush=True,
     )
+    if export_stats_csv is not None:
+        if single_file_csv_rows:
+            _write_chain_step_stats_csv(export_stats_csv, single_file_csv_rows)
+            print(
+                f"[viz] 已导出逐步 F/L/Q 统计 CSV -> {export_stats_csv}",
+                flush=True,
+            )
+        else:
+            print(
+                "[viz] 跳过导出 CSV：无逐步数据行（single-file 模式）",
+                flush=True,
+            )
+
     tail_note = (
         f"per-step trim P={plot_trim_each_tail}"
         if is_step_trim
@@ -807,6 +942,14 @@ def main() -> None:
         metavar="NAME=PATH",
         help="显式指定列：方法显示名与 jsonl 路径，可重复多次，顺序即列顺序",
     )
+    p.add_argument(
+        "--export-stats-csv",
+        nargs="?",
+        const="__AUTO__",
+        default=None,
+        metavar="PATH",
+        help="写出 PNG 后导出与图一致的逐步 F/L/Q 及基线 CSV（UTF-8 BOM）；仅写该开关不写路径时默认为 <out 主名>_plot_stats.csv",
+    )
     args = p.parse_args()
 
     grid_pairs: List[Tuple[str, Path]] = []
@@ -872,6 +1015,13 @@ def main() -> None:
             out = jsonl.parent / f"{jsonl.stem}_viz.png"  # type: ignore
     out = Path(out).resolve()
 
+    export_stats_csv: Optional[Path] = None
+    esc = args.export_stats_csv
+    if esc == "__AUTO__":
+        export_stats_csv = out.with_name(out.stem + "_plot_stats.csv")
+    elif esc:
+        export_stats_csv = Path(esc).resolve()
+
     title_suffix = ""
     if args.method:
         title_suffix = f" [{args.method}]"
@@ -889,6 +1039,7 @@ def main() -> None:
         aggregate=str(args.aggregate),
         plot_trim_scope=str(args.plot_trim_scope),
         step_trim_basis=str(args.step_trim_basis),
+        export_stats_csv=export_stats_csv,
     )
 
     def run_grid() -> None:

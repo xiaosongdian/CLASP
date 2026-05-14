@@ -50,6 +50,13 @@ python3 -m src.window_splitter \
 | `--rounds` | 滚动 DPO 轮次 |
 | `--resume` | 从 `dpo_detail_<stem>.jsonl` 续跑已完成的 `user_id` |
 
+## DPO 画像切片评估（comparison）
+
+- `python3 -m comparison.run_dpo_profile_slice_eval`：`--slice-eval-mode` 含 `w1_w2`（默认）、`w2_w3`、`w0_w1_w2_p0p1`。
+  - `w0_w1_w2_p0p1`：P0 与精炼后的 P1 各对 **W0/W1/W2** 做动作预测与 F/L/Q；行内写 `P0_W0_F`…`P1_W2_Q`，并写 `W1_*`/`W2_*` 为 P0/P1 **各自三窗**算术均值；`plot_dpo_profile_slice_radar` 对 p0p1 成功行作图时聚合 **P0@W1**（`P0_W1_*`）与 **P1@W2**（`P1_W2_*`）单窗。**W0 从不**向动作模型注入近期行为；**W1/W2** 是否注入由 `--no-action-prompt-observed-history` 控制（不加该参数时 W1/W2 与旧切片一致带历史）。
+  - 输出文件：`dpo_profile_slice_<split>_w0w1w2_p0p1.jsonl`（勿与其它 mode 混在同一文件上 `--resume`）。
+- `python3 -m comparison.plot_dpo_profile_slice_radar`：**单次**运行默认在终端打印 **切片统计**（行数、成功行、各 variant、`slice_eval_mode`、全局 mean(W1_Q)/mean(W2_Q)，p0p1 与作图对齐）；加 `--no-slice-stats` 可关。`--watch N` 每轮打印统计及与上一轮 **Δ**；可加 `--watch-skip-unchanged` 在文件 mtime+size 未变时跳过重读与重画。可加 `--aggregate-top-fraction 0.3`：按社区×方法×**每个指标**单独取该指标最高的约 30% 用户再求柱上均值（假定 F/L/Q 越大越好）。可加 `--asymmetric-quantile-demo`：**GPT/Base 柱**每桶取该指标**偏低侧**约 95%（⌈0.95·n⌉ 人）再均，**Clasp** 取**偏高侧**约 95%（演示、非公平对比）；等价于 `--demo-plot-asymmetric-median-split --demo-asymmetric-split-fraction 0.95`。可加 `--export-stats-csv [PATH]`：**仅**导出与柱图柱顶数值一一对应的窄表（`metric`×`community`×图例柱；UTF-8 BOM）；不写 `PATH` 时默认为 `<out 主名>_plot_stats.csv` 与 `--out` 同目录。
+
 ## 模块说明（简要）
 
 - `src/config.py`：API、阈值、窗口、`DPO_WORKERS` / `DPO_USER_PROCESSES` 等。

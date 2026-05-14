@@ -51,7 +51,7 @@
 
 - **不带观测历史的动作 prompt**：加 **`--no-action-prompt-observed-history`** 时，动作模型输入不再包含 (1) 拼在画像后的本窗行为块；(2) 「Recent user actions」滑窗；仍保留 **Current scenario**（目标窗口内当前条的上下文）。可与 `src/config.py` 中 **`ACTION_PROMPT_INCLUDE_OBSERVED_HISTORY`** 配合（CLI 会写入每条结果里的 `action_prompt_include_observed_history`）。
 
-- **汇总图（按社区链上 F/L/Q）**：`python3 -m comparison.plot.visualize_baseline_chain <baseline_chain_*.jsonl> --out viz.png`。按 **`community_id`** 分组；**无论几个社区均写入同一个 `--out`**，多个社区时在一张 PNG 内 **纵向多子图**。**默认**以 **W1** 步聚合值为基线画 **Q** 的水平虚线；`--baseline-metric all` 为 F/L/Q 三条；`--no-baseline` 关闭。**降噪**：`--plot-trim-scope user` 时 `--plot-trim-each-tail 0.05` 双侧去极端用户行；**按步去极值**用 `--plot-trim-scope step --plot-trim-each-tail 0.05 --plot-trim-sides lower`（默认 `--step-trim-basis deviation`）；`--aggregate median` 逐步取中位数。加 **`--watch 10`** 每 10 秒重读 jsonl。
+- **汇总图（按社区链上 F/L/Q）**：`python3 -m comparison.plot.visualize_baseline_chain <baseline_chain_*.jsonl> --out viz.png`。按 **`community_id`** 分组；**无论几个社区均写入同一个 `--out`**，多个社区时在一张 PNG 内 **纵向多子图**。**默认**以 **W1** 步聚合值为基线画 **Q** 的水平虚线；`--baseline-metric all` 为 F/L/Q 三条；`--no-baseline` 关闭。**降噪**：`--plot-trim-scope user` 时 `--plot-trim-each-tail 0.05` 双侧去极端用户行；**按步去极值**用 `--plot-trim-scope step --plot-trim-each-tail 0.05 --plot-trim-sides lower`（默认 `--step-trim-basis deviation`）；`--aggregate median` 逐步取中位数。加 **`--watch 10`** 每 10 秒重读 jsonl。与图同源的逐步统计表：加 **`--export-stats-csv`**（仅开关则默认 `viz_plot_stats.csv` 与 `--out` 同目录、主名加 `_plot_stats`）或 **`--export-stats-csv /path/to.csv`**（UTF-8 BOM）；**多方法网格**（`--comparison-root` + `--results-stem` + `--methods` 等）同样支持。
 
 评估已跑完、只需作图时（指向对应 method 下的 jsonl）：
 

@@ -344,6 +344,7 @@ def evaluate_user_window_chain(
     profile_snapshot_dir: Optional[Path] = None,
     action_prompt_include_observed_history: bool = True,
     enable_three_window_evaluation: bool = True,
+    case_study_capture: bool = False,
 ) -> Dict[str, Any]:
     """
     对单条窗口化用户记录执行窗口链评估。
@@ -368,6 +369,10 @@ def evaluate_user_window_chain(
       每行含 user_id、phase、step_index、``profile`` 全文与 ``profile_length``；其它 method 忽略此参数。
     enable_three_window_evaluation:
       False 时不做链末三窗口对比（past/current/future 上旧 vs 新画像），可显著减少动作 API 调用。
+    case_study_capture:
+      仅当 method 为 clasp_online / clasp_online_no_hist 时生效：在每步 ``steps`` 中额外写入
+      ``profile_used_for_prediction``、``behavior_discrepancies``、``profile_after_refinement``（全文，体积大），
+      并在返回根上写入 ``case_study_initial_profile``（W0 后 S0）。供个案导出脚本使用，默认 False 以免撑爆 baseline jsonl。
     """
     uid = user_record.get("user_id")
     cid = user_record.get("community_id")
@@ -534,6 +539,9 @@ def evaluate_user_window_chain(
                     discrepancies = build_behavior_discrepancies(
                         preds_for_refine, targets, hist
                     )
+                    if case_study_capture:
+                        steps_out[-1]["profile_used_for_prediction"] = old_profile
+                        steps_out[-1]["behavior_discrepancies"] = discrepancies
                     n_var = max(1, int(refinement_variants))
                     candidates = generate_candidate_profiles(
                         profile_model,
@@ -617,6 +625,8 @@ def evaluate_user_window_chain(
                     # 记录画像长度
                     steps_out[-1]["profile_length"] = len(profile)
                     steps_out[-1]["num_candidates"] = len(candidates)
+                    if case_study_capture:
+                        steps_out[-1]["profile_after_refinement"] = profile
     
             if snap_file is not None:
                 _append_clasp_profile_snapshot(
@@ -673,7 +683,7 @@ def evaluate_user_window_chain(
         mean_q = sum(qs) / len(qs) if qs else None
         mean_f = sum(fs) / len(fs) if fs else None
     
-        return {
+        out: Dict[str, Any] = {
             "user_id": uid,
             "community_id": cid,
             "method": method,
@@ -688,3 +698,6 @@ def evaluate_user_window_chain(
             "mean_Q_chain": mean_q,
             "mean_F_chain": mean_f,
         }
+        if case_study_capture and method in CLASP_ONLINE_VARIANTS:
+            out["case_study_initial_profile"] = s0_fixed
+        return out

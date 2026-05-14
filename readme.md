@@ -14,9 +14,11 @@
 - `src/`：DPO pipeline 核心代码
 - `process_dataset/`：数据处理脚本
 - `data/`：导出后的训练/测试/评估数据
-- `comparison/`：对比实验相关代码（窗口链基线跑 `python -m comparison.run_baseline_comparison`；**clasp_online** / **clasp_online_no_hist** 可选写入各自 `profile_snapshots`，见 `comparison/README.md`）。链上 F/L/Q 可视化：`python -m comparison.plot.visualize_baseline_chain <单个.jsonl> --out …`；**多方法并排对比**（行为社区、列为方法；**最右列为各方法 Q 随窗口的叠线对比**）：`--comparison-root output/comparison --results-stem baseline_chain_test_contiguous.jsonl --methods static_s0,prefix_refresh,clasp_online,clasp_online_no_hist --out grid.png`，或重复 `--method-jsonl NAME=PATH`。
+- `comparison/`：对比实验相关代码（窗口链基线跑 `python -m comparison.run_baseline_comparison`；**clasp_online** / **clasp_online_no_hist** 可选写入各自 `profile_snapshots`，见 `comparison/README.md`）。链上 F/L/Q 可视化：`python -m comparison.plot.visualize_baseline_chain <单个.jsonl> --out …`；可加 **`--export-stats-csv`**（不写路径则默认 `<out 主名>_plot_stats.csv`）导出与图一致的逐步 F/L/Q 及基线表（UTF-8 BOM，便于 Excel）。**多方法并排对比**（行为社区、列为方法；**最右列为各方法 Q 随窗口的叠线对比**）：`--comparison-root output/comparison --results-stem baseline_chain_test_contiguous.jsonl --methods static_s0,prefix_refresh,clasp_online,clasp_online_no_hist --out grid.png`，或重复 `--method-jsonl NAME=PATH`。
+- `comparison/plot/plot_grid_contiguous_q_by_community.py`：读取 `comparison/plot/data/grid_contiguous_plot_stats.csv`，用 **2 行 × 3 列子图**展示六个 `community_id` 上 **五种方法** 的 **Q 随窗口 W1–W5** 折线（版式与加粗风格对齐 `comparison/plot/example_code.py`）。图例中 CSV 方法名映射为 **Static_Persona / Incremental_Persona / Regeneration_Persona / Full_History / Clasp**，配色采用顶会常用的定性区分色。运行：`python comparison/plot/plot_grid_contiguous_q_by_community.py`（默认输出 `comparison/plot/grid_contiguous_q_by_community.png`，可用 `--csv` / `--out` 指定路径）。
+- **DPO 画像切片**：`comparison/run_dpo_profile_slice_eval.py`（默认 P0→W1→精炼→P1→W2；可选 **`--slice-eval-mode w2_w3`**：需四窗 W0..W3，**W1_*** 存物理 W2 得分、**W2_*** 存物理 W3，输出 `…_w2w3.jsonl`）；绘图用 **`python -m comparison.plot_dpo_profile_slice_radar`**，从 `--slice-jsonl` 读数并画 **按社区的 F/L/Q 分组柱状图**（纵向三子图；`w0_w1_w2_p0p1` 成功行过半时：**灰柱 = baseline 的 P0@W1**，**彩柱 = 各法的 P1@W2**），默认 `--out` 仍为 `output/comparison/dpo_profile_slice/radar_summary.png`。**单次运行**默认在终端打印 **切片统计**（行数、成功行、variant 等；`--no-slice-stats` 可关）；`--watch N` 为周期性监控；可选 **`--asymmetric-quantile-demo`**（GPT/Base 每桶偏低侧约 95%、Clasp 偏高侧约 95%，演示、非公平对比）。与基线一致可加 **`--no-action-prompt-observed-history`**，动作 prompt 不附带观测历史。
 - `Action_model_experiment/`：动作模型基座 vs 微调对比（`run_action_model_eval.py`）
-- `scripts/`：辅助脚本
+- `scripts/`：辅助脚本（含 **`scripts/print_bluetrack_community_overview.py`**：按社区汇总 `user_stats` 用户数、`followers_list` 关注边、`user_actions` 动作条数与类型分布；连接用 `DB_*` 环境变量，与 `community_data_splitter` 一致；示例输出 `output/bluetrack_community_overview.md` / `.csv`）
 - `saves/`：模型或中间结果保存目录
 
 ## 动作模型评测（Action_model_experiment）
