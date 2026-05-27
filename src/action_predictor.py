@@ -7,7 +7,7 @@ given persona + historical actions, predict action type and content for each act
 import re
 import threading
 from typing import Any, Dict, List, Optional, Tuple
-
+from openai import APIError, BadRequestError, OpenAI
 import src.config as cfg
 from src.config import (
     TEXT_LONG,
@@ -474,7 +474,6 @@ def call_llm_api(
         cpte = max(1.5, min(cpte, 8.0))
         return max(1, int(total / cpte))
 
-    from openai import APIError, BadRequestError, OpenAI
 
     def _parse_allowed_max_tokens_from_error(msg: str) -> Optional[int]:
         """
@@ -662,7 +661,7 @@ def predict_actions_for_window(
 
     Return prediction list: [{"action_type": str, "content": str|None}, ...]
     """
-    # Read default values from config
+    # 从配置读取默认值
     if use_parallel is None:
         use_parallel = getattr(cfg, "ACTION_PREDICTION_PARALLEL", True)
     if workers is None:
@@ -676,7 +675,7 @@ def predict_actions_for_window(
     eff_suffix = profile_suffix if _ih else None
     eff_history_src = history_actions if _ih else []
 
-    # Parallel mode: all actions use same history window
+    # 并行模式：所有动作使用相同的历史窗口
     if use_parallel:
         from src.action_predictor_parallel import predict_actions_for_window_parallel
         return predict_actions_for_window_parallel(
@@ -692,7 +691,7 @@ def predict_actions_for_window(
             workers,
         )
 
-    # Serial mode (legacy): use sliding history
+    # 串行模式（旧版）：使用滑动历史
     user_profile = (profile + (f"\n\n{eff_suffix}" if (eff_suffix or "").strip() else "")).strip()
     predictions = []
     current_history = list(eff_history_src)
@@ -700,10 +699,10 @@ def predict_actions_for_window(
     hw = max(1, int(getattr(cfg, "ACTION_PREDICTION_HISTORY_WINDOW", 5)))
     n = len(target_actions)
     for i, target in enumerate(target_actions):
-        actual_type = target.get("action_type", "")  # Get actual type
+        actual_type = target.get("action_type", "")  # 获取真实类型
         recent = current_history[-hw:] if current_history and _ih else []
 
-        # Decision prediction
+        # 决策预测
         inst, inp = build_decision_prompt(user_profile, recent, target)
         raw_decision = invoke_action_llm(
             model,
@@ -716,9 +715,9 @@ def predict_actions_for_window(
         )
         pred_type = parse_action_type(raw_decision)
 
-        # Content prediction (judge by actual type, not predicted type)
+        # 内容预测（根据真实类型判断，而非预测类型）
         pred_content = None
-        if actual_type in ("post", "reply"):  # Key change: use actual_type
+        if actual_type in ("post", "reply"):  # 关键修改：使用 actual_type
             inst_c, inp_c = build_content_prompt(user_profile, recent, target)
             pred_content = invoke_action_llm(
                 model,
@@ -735,14 +734,14 @@ def predict_actions_for_window(
             "content": pred_content,
         })
 
-        # Add actual action to history (simulate time progression)
+        # 将真实动作加入历史（模拟时间推进）
         current_history.append(target)
 
     return predictions
 
 
 # ============================================================================
-# Discrepancy signal generation (for persona refinement)
+# 偏差信号生成（用于画像精炼）
 # ============================================================================
 
 def build_behavior_discrepancies(
@@ -751,17 +750,17 @@ def build_behavior_discrepancies(
     history_actions: List[Dict],
 ) -> str:
     """
-    Compare predictions vs actual, construct discrepancy signal text for persona refinement prompt use.
+    对比预测与真实，构造偏差信号文本，供画像精炼 prompt 使用。
 
-    Also compute and save semantic similarity to predictions (avoid redundant computation later).
+    同时计算并保存语义相似度到 predictions 中（避免后续重复计算）。
     """
     parts = []
     seen_signatures = set()
 
     def _normalized_scenario_for_dedup(s: str) -> str:
         """
-        When deduplicating, ignore error label in first line (e.g. [TEXT_GENERATION]/[DECISION_ONLY]),
-        only compare subsequent core content to avoid "identical content but different label" duplicate output.
+        去重时忽略首行的误差标签（如 [TEXT_GENERATION]/[DECISION_ONLY]），
+        只比较后续核心内容，避免"内容完全相同但标签不同"重复输出。
         """
         lines = [ln.strip() for ln in (s or "").splitlines() if ln.strip()]
         if lines and lines[0].startswith("[") and lines[0].endswith("]"):
@@ -800,20 +799,20 @@ def build_behavior_discrepancies(
         type_diff = pred_type != actual_type
 
         # ============================================
-        # Discrepancy 1: TEXT_GENERATION (content generation discrepancy)
-        # Only focus on content quality, not include type information
+        # 偏差1: TEXT_GENERATION (内容生成偏差)
+        # 只关注内容质量，不包含类型信息
         # ============================================
         if actual_type in ("post", "reply"):
-            # Use simplified scenario construction (remove redundant information)
+            # 使用简化的场景构建（去掉冗余信息）
             content_scenario = build_content_scenario_for_discrepancy(actual)
 
-            # Only show content, no type prefix
+            # 只展示内容，不包含类型前缀
             predicted_content = pred_content[:200] if pred_content else "(empty)"
 
-            # Construct actual content
+            # 构建真实内容
             if actual_type == "reply":
                 actual_content = (actual.get("action_text") or "")[:200]
-                # reply scenario description already includes replied object, no need for object_block
+                # reply 的场景描述已包含被回复对象，不需要 object_block
                 object_block = ""
             else:  # post
                 actual_content = actual_text[:200]
@@ -821,74 +820,74 @@ def build_behavior_discrepancies(
 
             actual_content = actual_content if actual_content else "(empty)"
 
-            # Compute semantic similarity (use full text, no truncation)
-            # If already computed, use directly
+            # 计算语义相似度（使用完整文本，不截断）
+            # 如果已经计算过，直接使用
             if "semantic_similarity" not in pred:
                 full_pred_content = pred_content if pred_content else ""
-                # For post type, prefer action_text, then target
-                # For reply type, action_text is reply content, target is replied object
+                # 对于 post 类型，优先使用 action_text，其次 target
+                # 对于 reply 类型，action_text 是回复内容，target 是被回复对象
                 if actual_type == "reply":
                     full_actual_content = actual.get("action_text") or ""
                 else:  # post
                     full_actual_content = actual.get("action_text") or actual.get("target") or ""
 
-                # Only compute similarity when both texts are non-empty
+                # 只有当两个文本都非空时才计算相似度
                 if full_pred_content and full_actual_content:
                     similarity = compute_semantic_similarity(full_pred_content, full_actual_content)
                 else:
-                    similarity = float('nan')  # Mark as uncomputable
+                    similarity = float('nan')  # 标记为无法计算
 
-                # Save to predictions to avoid redundant computation later
+                # 保存到 predictions 中，避免后续重复计算
                 pred["semantic_similarity"] = similarity
             else:
                 similarity = pred["semantic_similarity"]
 
-            # Add similarity info to scenario description
-            # Use math.isnan() to check if valid value
+            # 在场景描述中添加相似度信息
+            # 使用 math.isnan() 检查是否为有效值
             import math
             if not math.isnan(similarity):
                 content_scenario_with_sim = f"{content_scenario} [Similarity: {similarity:.3f}]"
             else:
                 content_scenario_with_sim = content_scenario
 
-            # Record discrepancy
+            # 记录偏差
             _append_unique(
                 scenario_context=f"[TEXT_GENERATION] {content_scenario_with_sim}",
                 object_block=object_block,
-                predicted_action=f'"{predicted_content}"',  # Content only
-                actual_action=f'"{actual_content}"',        # Content only
+                predicted_action=f'"{predicted_content}"',  # 只有内容
+                actual_action=f'"{actual_content}"',        # 只有内容
             )
 
         # ============================================
-        # Discrepancy 2: DECISION_ONLY (decision discrepancy)
-        # Only focus on type judgment, not include content information
+        # 偏差2: DECISION_ONLY (决策偏差)
+        # 只关注类型判断，不包含内容信息
         # ============================================
         if type_diff:
-            # Use simplified scenario construction (remove redundant context repetition)
+            # 使用简化的场景构建（去掉冗余的上下文重复）
             decision_scenario = build_decision_scenario_for_discrepancy(actual)
 
-            # Only show type, no content
+            # 只展示类型，不包含内容
             predicted_type = pred_type
             actual_type_str = actual_type
 
-            # Simplified context information (only provide when necessary)
+            # 上下文信息简化（只在必要时提供）
             object_block = ""
             if actual_type == "reply":
                 replied_to = (actual.get("target") or "")[:200]
                 if replied_to:
                     object_block = f'Reply context: "{replied_to}"\n'
             elif actual_type in ("post", "like", "repost"):
-                # Other types provide brief context
+                # 其他类型提供简短上下文
                 context = (actual.get("target") or actual.get("action_text") or "")[:150]
                 if context:
                     object_block = f'Content: "{context}"\n'
 
-            # Record discrepancy
+            # 记录偏差
             _append_unique(
                 scenario_context=f"[DECISION_ONLY] {decision_scenario}",
                 object_block=object_block,
-                predicted_action=predicted_type,  # Type only
-                actual_action=actual_type_str,    # Type only
+                predicted_action=predicted_type,  # 只有类型
+                actual_action=actual_type_str,    # 只有类型
             )
 
     if not parts:
