@@ -1,6 +1,9 @@
 # CLASP: A Closed-Loop Behavior Alignment Framework for Social Media Agent Simulation
 
+![CLASP Logo](scripts/logo.png)
+
 A closed-loop behavior alignment framework that leverages explicit, dynamically refined personas to bridge users' historical behaviors and subsequent agent actions, ensuring behavioral consistency and temporal adaptability in social media simulation.
+
 
 ## Overview
 
@@ -12,58 +15,6 @@ CLASP addresses these challenges through:
 - **Closed-Loop Alignment**: Continual behavior alignment driven by action prediction discrepancies
 - **Temporal Adaptability**: Capturing evolving user preferences across time windows
 
-## Key Features
-
-- **Closed-Loop Behavior Alignment**: Continually refines personas based on action prediction discrepancies
-- **Decoupled Dual-Model Architecture**: 
-  - **Persona Model**: Generates and refines explicit user personas
-  - **Action Model**: Predicts user actions conditioned on personas
-- **DPO-based Persona Refinement**: Generates multiple candidate personas and selects the best one using preference optimization
-- **Comprehensive Evaluation**: Measures both action accuracy (F1) and semantic similarity (L) of generated content
-- **Long-Horizon Simulation**: Supports multi-window evaluation to assess temporal consistency
-- **BlueTrack Dataset**: Large-scale Bluesky dataset with complete action elements and heterogeneous behaviors
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│              CLASP: Closed-Loop Alignment                   │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  1. Window Splitting (W0, W1, ..., W5)                    │
-│     └─> Temporal segmentation of user actions              │
-│                                                             │
-│  2. Initial Persona Generation (S0)                        │
-│     └─> Persona Model: Generate explicit user persona      │
-│         from W0 historical behaviors                        │
-│                                                             │
-│  3. Action Prediction (Decoupled)                          │
-│     └─> Action Model: Conditioned on persona S0            │
-│         ├─> Decision: Predict action type                  │
-│         └─> Content: Generate post/reply text              │
-│                                                             │
-│  4. Discrepancy Detection                                  │
-│     └─> Compare predicted vs. actual actions               │
-│         ├─> Action type mismatches                         │
-│         └─> Content semantic differences                   │
-│                                                             │
-│  5. Persona Refinement (Closed-Loop)                       │
-│     └─> Persona Model: Refine based on discrepancies       │
-│         ├─> Generate N candidate personas (DPO)            │
-│         ├─> Evaluate on multiple windows                   │
-│         └─> Select best persona (highest Q score)          │
-│                                                             │
-│  6. Iterative Alignment (Long-Horizon)                     │
-│     └─> S0 → W1 → S1 → W2 → S2 → ... → W5                 │
-│         (Continual behavior alignment)                      │
-│                                                             │
-│  Evaluation Metrics:                                        │
-│     ├─> F: Action alignment (weighted F1)                  │
-│     ├─> L: Content similarity (cosine)                     │
-│     └─> Q: Overall quality (α*F + (1-α)*L)                 │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
 
 ## Project Structure
 
@@ -92,21 +43,17 @@ Clasp_git/
 │   ├── action_predictor_batch.py    # Batch prediction
 │   ├── Clasp/
 │   │   └── profile_client.py    # Profile service client
-│   └── plot/                     # Visualization scripts
-│       ├── visualize_baseline_chain.py
-│       ├── visualize_f_l_comprehensive.py
-│       ├── visualize_q_stability_final.py
-│       └── ...
+│   
+│       
+│       
+│       
+│       
 │
 ├── scripts/                      # Utility scripts
 │   ├── start_vllm_baseline_tmux.sh   # Start baseline vLLM service
 │   ├── start_vllm_clasp_tmux.sh      # Start CLASP vLLM service
 │   └── start_vllm_dpo_slice_tmux.sh  # Start DPO slice service
-│
-└── output/                       # Experiment outputs (gitignored)
-    ├── windowed/                 # Windowed data
-    ├── dpo/                      # DPO training outputs
-    └── comparison/               # Evaluation results
+└── 
 ```
 
 ## Installation
@@ -125,7 +72,7 @@ Clasp_git/
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd Clasp_git
+cd Clasp
 
 # Install dependencies
 pip install torch transformers vllm sentence-transformers
@@ -222,20 +169,6 @@ python -m comparison.run_baseline_comparison \
     --plot
 ```
 
-### 5. Visualization
-
-```bash
-# Visualize baseline comparison results
-python -m comparison.plot.visualize_baseline_chain \
-    --input output/comparison/clasp_online/baseline_chain_test.jsonl \
-    --output output/comparison/clasp_online/chain_results.png
-
-# Comprehensive F/L analysis
-python -m comparison.plot.visualize_f_l_comprehensive \
-    --method clasp_online \
-    --split test
-```
-
 ## Evaluation Metrics
 
 ### Action Accuracy (F)
@@ -254,15 +187,6 @@ Q = α * F + (1 - α) * L
 ```
 where α = 0.6 (configurable)
 
-## Baseline Methods
-
-1. **static_s0**: Fixed initial persona (no refinement)
-2. **prefix_refresh**: Regenerate persona from all observed actions
-3. **clasp_online**: Closed-loop alignment with discrepancy-driven refinement (**our method**)
-4. **history_only**: No persona, use raw action history
-5. **incremental_persona**: Refine with new actions (no discrepancy signals)
-
-**Performance**: CLASP improves overall alignment quality by up to **31.8%** and reduces variance by **32.1%** during long-sequence simulation compared to baselines.
 
 ## Advanced Features
 
@@ -304,6 +228,12 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 ## Dataset: BlueTrack
 
+**BlueTrack** is a dataset for social behavior analysis and user personality modeling.
+
+### Download
+You can download the BlueTrack dataset from the following link:
+- 🔗 [BlueTrack Download](https://anonymous-hf.up.railway.app/a/dwsruwl12j4z/)
+
 BlueTrack is a large-scale Bluesky dataset that covers:
 - **Long-horizon behaviors**: Multi-window temporal sequences
 - **Heterogeneous actions**: Post, reply, repost, like with complete elements
@@ -311,33 +241,9 @@ BlueTrack is a large-scale Bluesky dataset that covers:
 
 This dataset facilitates realistic social media simulation and evaluation.
 
-## Citation
+## Ciation Format
 
-If you use this code or dataset in your research, please cite:
 
-```bibtex
-@article{clasp2024,
-  title={CLASP: A Closed-Loop Behavior Alignment Framework for Social Media Agent Simulation},
-  author={Your Name},
-  journal={arXiv preprint arXiv:XXXX.XXXXX},
-  year={2024}
-}
-```
-
-## License
-
-[Specify your license here]
-
-## Contact
-
-For questions or issues, please open an issue on GitHub or contact [your-email].
-
-## Key Results
-
-- **+31.8%** improvement in overall alignment quality
-- **-32.1%** reduction in alignment variance during long-sequence simulation
-- Demonstrates behavioral consistency and temporal adaptability
-- Outperforms static, prefix-based, and history-only baselines
 
 ## Acknowledgments
 
