@@ -1,10 +1,94 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.jsonl
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.Python
 
-output/**
-output/dpo/train/dpo_pairs_community_0.jsonl
-output/dpo/train/dpo_detail_community_0.jsonl
-output/windowed/test/community_1.jsonl
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code Agent (not part of the project)
+.claude/
+.agents/
+
+# Logs
+*.log
+dpo_train.log
+
+# Cache
+.matplotlib_cache/
+*.cache
+
+# Output and Results (large data files, model outputs)
+output/
+saves/
+
+# Generated Plots and Figures
+*.png
+*.pdf
+*.jpg
+*.jpeg
+*.svg
+
+# Data Files (raw data, processed data, evaluation results)
+*.jsonl
+*.csv
+*.parquet
+*.pkl
+*.pickle
+
+# Model Checkpoints (large model files)
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# Temporary Files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Experiment Directories (keep code, ignore outputs)
+DPO_Train/output/
+DPO_Train/*.png
+DPO_Train/*.pdf
+comparison/plot/dpo_improvement_*/
+comparison/plot/*.png
+comparison/plot/*.pdf
+comparison/plot/data/*.csv
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Jupyter Notebooks (optional, uncomment if needed)
+# .ipynb_checkpoints/
+# *.ipynb
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# OS-specific
+.DS_Store
+Thumbs.db
+desktop.ini

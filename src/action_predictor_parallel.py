@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-并行化的动作预测器
+Parallelized action predictor
 
-关键改进：
-1. 预测窗口 W_{t+1} 时，所有动作使用相同的历史窗口 W_t
-2. 不使用窗口内部的滑动历史
-3. 可以并行预测窗口内的所有动作
+Key improvements:
+1. When predicting window W_{t+1}, all actions use same history window W_t
+2. Don't use sliding history within window
+3. Can predict all actions in window in parallel
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,16 +32,18 @@ def predict_single_action(
     total_actions: int,
 ) -> Tuple[int, Dict]:
     """
-    预测单个动作（用于并行调用）
+    Predict single action (for parallel invocation)
 
     Args:
-        action_idx: 动作索引（用于排序）
-        total_actions: 总动作数（用于 debug）
+        action_idx: Action index (for sorting)
+        total_actions: Total action count (for debug)
 
     Returns:
         (action_idx, prediction)
     """
-    # 决策预测
+    actual_type = target_action.get("action_type", "")  # Get actual type
+
+    # Decision prediction
     inst, inp = build_decision_prompt(user_profile, history_actions, target_action)
     raw_decision = invoke_action_llm(
         model,
@@ -54,9 +56,9 @@ def predict_single_action(
     )
     pred_type = parse_action_type(raw_decision)
 
-    # 内容预测（仅 post/reply）
+    # Content prediction (judge by actual type, not predicted type)
     pred_content = None
-    if pred_type in ("post", "reply"):
+    if actual_type in ("post", "reply"):  # Key change: use actual_type
         inst_c, inp_c = build_content_prompt(user_profile, history_actions, target_action)
         pred_content = invoke_action_llm(
             model,
@@ -87,20 +89,20 @@ def predict_actions_for_window_parallel(
     workers: int = 10,
 ) -> List[Dict]:
     """
-    并行预测窗口内的所有动作
+    Predict all actions in window in parallel
 
-    关键改进：
-    - 所有动作使用相同的 history_actions（历史窗口）
-    - 不使用窗口内部的滑动历史
-    - 可以并行预测所有动作
+    Key improvements:
+    - All actions use same history_actions (history window)
+    - Don't use sliding history within window
+    - Can predict all actions in parallel
 
     Args:
-        history_actions: 历史窗口（W_t）；若由上层已置空则 prompt 中无 Recent user actions
-        target_actions: 目标窗口（W_{t+1}）
-        workers: 并行线程数
+        history_actions: History window (W_t); if already set to empty by upper layer, no Recent user actions in prompt
+        target_actions: Target window (W_{t+1})
+        workers: Number of parallel threads
 
     Returns:
-        预测列表：[{"action_type": str, "content": str|None}, ...]
+        Prediction list: [{"action_type": str, "content": str|None}, ...]
     """
     user_profile = (profile + (f"\n\n{profile_suffix}" if (profile_suffix or "").strip() else "")).strip()
     n = len(target_actions)
@@ -108,16 +110,16 @@ def predict_actions_for_window_parallel(
     if n == 0:
         return []
 
-    # 使用历史窗口的最后几条作为上下文（固定）
+    # Truncate history to window size
     hw = max(1, int(getattr(cfg, "ACTION_PREDICTION_HISTORY_WINDOW", 5)))
     history_context = history_actions[-hw:] if history_actions else []
 
-    # 并行预测所有动作
+    # Prepare predictions dict
     predictions_dict = {}
     eff_workers = max(1, min(workers, n))
 
     if eff_workers == 1:
-        # 串行模式（调试用）
+        # Serial mode (single worker)
         for i, target in enumerate(target_actions):
             idx, pred = predict_single_action(
                 model,
@@ -133,7 +135,7 @@ def predict_actions_for_window_parallel(
             )
             predictions_dict[idx] = pred
     else:
-        # 并行模式
+        # Parallel mode (multiple workers)
         with ThreadPoolExecutor(max_workers=eff_workers, thread_name_prefix="action_pred") as pool:
             futs = {
                 pool.submit(
@@ -156,6 +158,6 @@ def predict_actions_for_window_parallel(
                 idx, pred = fut.result()
                 predictions_dict[idx] = pred
 
-    # 按索引排序返回
+    # Restore order
     predictions = [predictions_dict[i] for i in range(n)]
     return predictions

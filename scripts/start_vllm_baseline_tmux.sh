@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
 #
-# 基线对比：用 vLLM 启动两个相同的 Llama-3-8B-Instruct「基础」checkpoint。
-# - 端口 8001：画像（对应 PROFILE_API_BASE）
-# - 端口 8002：动作（对应 ACTION_API_BASE）
+# Start vLLM services for baseline comparison (same base model on two ports)
+# - Port 8001: Persona generation (PROFILE_API_BASE)
+# - Port 8002: Action prediction (ACTION_API_BASE)
 #
-# served-model-name 须与 src.config.COMPARISON_BASELINE_VLLM_MODEL 一致（对比脚本里按路径请求）。
+# Both use the same base Llama-3.1-8B-Instruct checkpoint.
+# The served-model-name must match COMPARISON_BASELINE_VLLM_MODEL in src/config.py.
 #
-# 先启动第一个 vLLM，等 /v1/models 可访问后再启动第二个，避免双进程同时占显存导致失败。
+# The first vLLM service is started and waits until ready before starting the second,
+# to avoid GPU memory conflicts.
 #
-# 用法：
+# Usage:
 #   ./scripts/start_vllm_baseline_tmux.sh
 #   tmux attach -t vllm_baseline
 #
-# 环境变量（可选）：
-#   VLLM_START_WAIT_MAX_SEC=900   等待第一个服务就绪的最长时间（秒）
-#   VLLM_START_POLL_INTERVAL=5    轮询间隔（秒）
-#   GPU_PROFILE=0 GPU_ACTION=1    双卡时指定 GPU
+# Environment variables (optional):
+#   BASE_MODEL_PATH          Path to base model checkpoint
+#   SERVED_MODEL_NAME        Model name for API
+#   VLLM_START_WAIT_MAX_SEC  Max wait time for first service (default: 120s)
+#   VLLM_START_POLL_INTERVAL Polling interval (default: 5s)
+#   GPU_PROFILE              GPU ID for persona model (default: 0)
+#   GPU_ACTION               GPU ID for action model (default: 0)
 #
 
 set -euo pipefail
@@ -23,9 +28,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# 与 src/config.py 中 COMPARISON_BASELINE_VLLM_MODEL 对齐（OpenAI API 的 model 字段）
-BASE_MODEL_PATH="/data/LLM_models/Meta-Llama-3-8B-Instruct"
-SERVED_MODEL_NAME="Meta-Llama-3-8B-Instruct"
+# Default paths - override with environment variables
+BASE_MODEL_PATH="${BASE_MODEL_PATH:-models/Meta-Llama-3.1-8B-Instruct}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Meta-Llama-3.1-8B-Instruct}"
 
 PROFILE_PORT=8001
 ACTION_PORT=8002
@@ -39,36 +44,36 @@ POLL_SEC="${VLLM_START_POLL_INTERVAL:-5}"
 SESSION="vllm_baseline"
 
 if ! command -v tmux &>/dev/null; then
-  echo "需要安装 tmux，例如: sudo apt-get install tmux"
+  echo "Error: tmux is required. Install with: sudo apt-get install tmux"
   exit 1
 fi
 
 if ! command -v curl &>/dev/null; then
-  echo "需要 curl 用于检测 vLLM 是否就绪"
+  echo "Error: curl is required for health checks"
   exit 1
 fi
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
-  echo "tmux 会话已存在: $SESSION"
-  echo "请先: tmux kill-session -t $SESSION   或   tmux attach -t $SESSION"
+  echo "Error: tmux session already exists: $SESSION"
+  echo "Please run: tmux kill-session -t $SESSION   or   tmux attach -t $SESSION"
   exit 1
 fi
 
 echo "=========================================="
-echo "vLLM 基线（双端口同基础模型，顺序启动）"
-echo "  模型目录: $BASE_MODEL_PATH"
-echo "  served-model-name: $SERVED_MODEL_NAME"
-echo "  先 :${PROFILE_PORT}，就绪后再 :${ACTION_PORT}"
+echo "Starting vLLM Baseline (dual ports, same base model)"
+echo "  Model: $BASE_MODEL_PATH"
+echo "  Served name: $SERVED_MODEL_NAME"
+echo "  Starting :${PROFILE_PORT} first, then :${ACTION_PORT}"
 echo "=========================================="
 
 tmux new-session -d -s "$SESSION"
 
 tmux rename-window -t "${SESSION}:0" 'profile_8001'
 tmux send-keys -t "${SESSION}:0" "cd '$ROOT'" C-m
-tmux send-keys -t "${SESSION}:0" "CUDA_VISIBLE_DEVICES=${GPU_PROFILE} python -m vllm.entrypoints.openai.api_server --model '${BASE_MODEL_PATH}' --served-model-name '${SERVED_MODEL_NAME}' --port ${PROFILE_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization 0.3" C-m
+tmux send-keys -t "${SESSION}:0" "CUDA_VISIBLE_DEVICES=${GPU_PROFILE} python -m vllm.entrypoints.openai.api_server --model '${BASE_MODEL_PATH}' --served-model-name '${SERVED_MODEL_NAME}' --port ${PROFILE_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization 0.5" C-m
 
 echo ""
-echo "[1/2] 已启动画像侧 vLLM（端口 ${PROFILE_PORT}），等待 API 就绪（最长 ${WAIT_MAX_SEC}s，每 ${POLL_SEC}s 检查）..."
+echo "[1/2] Started persona vLLM (port ${PROFILE_PORT}), waiting for API ready (max ${WAIT_MAX_SEC}s, polling every ${POLL_SEC}s)..."
 
 elapsed=0
 ready=0
@@ -80,27 +85,27 @@ while [ "$elapsed" -lt "$WAIT_MAX_SEC" ]; do
   sleep "$POLL_SEC"
   elapsed=$((elapsed + POLL_SEC))
   if [ $((elapsed % 30)) -eq 0 ] || [ "$elapsed" -eq "$POLL_SEC" ]; then
-    echo "  ... 已等待 ${elapsed}s"
+    echo "  ... waited ${elapsed}s"
   fi
 done
 
 if [ "$ready" != "1" ]; then
-  echo "[✗] 第一个 vLLM 在 ${WAIT_MAX_SEC}s 内未就绪。请 tmux attach -t ${SESSION} 查看窗口 0 日志。"
+  echo "[✗] First vLLM not ready within ${WAIT_MAX_SEC}s. Check logs: tmux attach -t ${SESSION}"
   exit 1
 fi
 
-echo "[✓] 端口 ${PROFILE_PORT} 已就绪（/v1/models HTTP 200）"
+echo "[✓] Port ${PROFILE_PORT} ready (/v1/models HTTP 200)"
 
 echo ""
-echo "[2/2] 启动动作侧 vLLM（端口 ${ACTION_PORT}）..."
+echo "[2/2] Starting action vLLM (port ${ACTION_PORT})..."
 tmux new-window -t "${SESSION}:1" -n 'action_8002'
 tmux send-keys -t "${SESSION}:1" "cd '$ROOT'" C-m
-tmux send-keys -t "${SESSION}:1" "CUDA_VISIBLE_DEVICES=${GPU_ACTION} python -m vllm.entrypoints.openai.api_server --model '${BASE_MODEL_PATH}' --served-model-name '${SERVED_MODEL_NAME}' --port ${ACTION_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization 0.5" C-m
+tmux send-keys -t "${SESSION}:1" "CUDA_VISIBLE_DEVICES=${GPU_ACTION} python -m vllm.entrypoints.openai.api_server --model '${BASE_MODEL_PATH}' --served-model-name '${SERVED_MODEL_NAME}' --port ${ACTION_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization 0.3" C-m
 
 echo ""
-echo "两个进程均已下发启动命令。"
-echo "  接入: tmux attach -t ${SESSION}"
-echo "  窗口 0: 画像（8001）  窗口 1: 动作（8002）"
-echo "  分离: Ctrl+B 然后按 D"
-echo "  结束: tmux kill-session -t ${SESSION}"
+echo "Both processes started."
+echo "  Attach: tmux attach -t ${SESSION}"
+echo "  Window 0: Persona (8001)  Window 1: Action (8002)"
+echo "  Detach: Ctrl+B then D"
+echo "  Kill:   tmux kill-session -t ${SESSION}"
 echo ""

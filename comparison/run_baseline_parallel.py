@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-并行化优化的基线对比评估
+Parallelized baseline comparison evaluation
 
-参考 dpo_pipeline.py 的并行化策略：
-1. 多进程并行处理不同用户（ProcessPoolExecutor）
-2. 每个用户内部，多个方法串行执行
-3. 每个方法内部，候选画像评估使用线程池（ThreadPoolExecutor）
+Parallelization strategy (reference dpo_pipeline.py):
+1. Multi-process parallel processing of different users (ProcessPoolExecutor)
+2. Within each user, multiple methods execute serially
+3. Within each method, candidate persona evaluation uses thread pool (ThreadPoolExecutor)
 """
 
 import json
@@ -32,7 +32,7 @@ from src.scorer import SemanticScorer
 
 def _baseline_user_worker(job: tuple) -> tuple:
     """
-    子进程工作函数：处理单个用户的所有方法评估
+    Subprocess worker function: evaluate all methods for a single user
 
     Args:
         job: (
@@ -63,13 +63,13 @@ def _baseline_user_worker(job: tuple) -> tuple:
         enable_three_window_evaluation,
     ) = job
 
-    # 错开启动，减轻 API 洪峰
+    # Stagger startup to reduce API burst
     if stagger_sec > 0:
         time.sleep(idx * stagger_sec)
 
     t0 = time.time()
 
-    # 每个子进程加载自己的 SemanticScorer
+    # Each subprocess loads its own SemanticScorer
     semantic_scorer = SemanticScorer(device=scorer_device)
 
     def _uk(u: Dict[str, Any]) -> str:
@@ -79,7 +79,7 @@ def _baseline_user_worker(job: tuple) -> tuple:
 
     comparison_root = Path(comparison_root_str)
 
-    # 对该用户评估尚未完成的方法
+    # Evaluate methods not yet completed for this user
     results = {}
     for method in methods:
         done = completed_by_method.get(method) or set()
@@ -93,7 +93,7 @@ def _baseline_user_worker(job: tuple) -> tuple:
                 user_data,
                 method,
                 semantic_scorer,
-                profile_model=None,  # 使用 vLLM API
+                profile_model=None,  # Use vLLM API
                 profile_tokenizer=None,
                 action_model=None,
                 action_tokenizer=None,
@@ -143,38 +143,38 @@ def run_baseline_comparison_parallel(
     max_users_per_community: int = 100,
 ) -> None:
     """
-    并行化的基线对比评估
+    Parallelized baseline comparison evaluation
 
     Args:
-        input_files: 输入文件列表
-        methods: 评估方法列表
-        output_stem: 输出文件名前缀
-        comparison_root: 输出根目录
-        max_users: 最大用户数
-        workers: 每个用户内部的候选评估线程数
-        user_processes: 并行处理的用户进程数
-        user_process_stagger_sec: 进程启动错开时间（秒）
-        scorer_device: 语义评分器设备（cpu/cuda）
-        split: 数据集划分
-        resume: True 时不覆盖已有 jsonl，仅追加未完成用户；按各 method 文件跳过已成功行
-        refinement_variants / always_accept_refinement: 与串行 CLI 一致
-        record_profile_snapshots: True 且 methods 含 clasp_online / clasp_online_no_hist 时写入各 method 下画像快照目录
-        action_prompt_include_observed_history: False 时动作 prompt 不含观测历史（与串行 CLI 一致）
-        enable_three_window_evaluation: False 时跳过链末三窗口评估（与串行 CLI 一致）
-        max_users_per_community: >0 时每社区仅保留前 K 条用户（输入顺序）；0 不限制（与串行 CLI 一致）
+        input_files: List of input files
+        methods: List of evaluation methods
+        output_stem: Output filename prefix
+        comparison_root: Output root directory
+        max_users: Maximum number of users
+        workers: Number of candidate evaluation threads per user
+        user_processes: Number of parallel user processes
+        user_process_stagger_sec: Process startup stagger time (seconds)
+        scorer_device: Semantic scorer device (cpu/cuda)
+        split: Dataset split
+        resume: When True, don't overwrite existing jsonl, only append incomplete users; skip completed rows per method file
+        refinement_variants / always_accept_refinement: Consistent with serial CLI
+        record_profile_snapshots: When True and methods contain any ``CLASP_ONLINE_VARIANTS`` (clasp_online / no_hist / *_ablate_*), write persona snapshot directories under each method
+        action_prompt_include_observed_history: When False, action prompt excludes observed history (consistent with serial CLI)
+        enable_three_window_evaluation: When False, skip three-window evaluation at chain end (consistent with serial CLI)
+        max_users_per_community: When >0, keep only first K users per community (input order); 0 means no limit (consistent with serial CLI)
     """
-    print(f"\n[BaselineChain] 并行化评估启动", flush=True)
-    print(f"  方法: {', '.join(methods)}", flush=True)
-    print(f"  用户进程数: {user_processes}", flush=True)
-    print(f"  候选评估线程数: {workers}", flush=True)
-    print(f"  语义评分器: {scorer_device}", flush=True)
+    print(f"\n[BaselineChain] Parallel evaluation started", flush=True)
+    print(f"  Methods: {', '.join(methods)}", flush=True)
+    print(f"  User processes: {user_processes}", flush=True)
+    print(f"  Candidate evaluation threads: {workers}", flush=True)
+    print(f"  Semantic scorer: {scorer_device}", flush=True)
     if max_users_per_community > 0:
         print(
-            f"  每社区最多用户数: {max_users_per_community}（0=不限制）",
+            f"  Max users per community: {max_users_per_community} (0=no limit)",
             flush=True,
         )
 
-    # 加载所有用户
+    # Load all users
     users = []
     for fp_in in input_files:
         with fp_in.open("r", encoding="utf-8") as fin:
@@ -193,8 +193,8 @@ def run_baseline_comparison_parallel(
     users = filter_users_per_community(users, max_users_per_community)
     if max_users_per_community > 0 and len(users) < n_loaded:
         print(
-            f"[BaselineChain] 按社区裁剪: {n_loaded} -> {len(users)} 用户 "
-            f"（每社区≤{max_users_per_community}）",
+            f"[BaselineChain] Trim by community: {n_loaded} -> {len(users)} users "
+            f"(≤{max_users_per_community} per community)",
             flush=True,
         )
 
@@ -211,7 +211,7 @@ def run_baseline_comparison_parallel(
             if not resume:
                 _p.unlink(missing_ok=True)
             print(
-                f"[BaselineChain] {sm} 画像快照（单文件，resume={'追加' if resume else '新文件'}）: {_p}",
+                f"[BaselineChain] {sm} persona snapshots (single file, resume={'append' if resume else 'new file'}): {_p}",
                 flush=True,
             )
 
@@ -230,7 +230,7 @@ def run_baseline_comparison_parallel(
             combined_jsonl=None,
         )
         stats = {m: len(completed_by_m.get(m) or set()) for m in methods}
-        print(f"[BaselineChain] --resume: 各 method 已成功用户数 {stats}", flush=True)
+        print(f"[BaselineChain] --resume: Completed users per method {stats}", flush=True)
 
     def _needs_work(user: Dict[str, Any]) -> bool:
         uk = serialize_user_key(user)
@@ -238,13 +238,13 @@ def run_baseline_comparison_parallel(
 
     users_work = [u for u in users if _needs_work(u)]
     n_users = len(users_work)
-    print(f"[BaselineChain] 待评估用户: {n_users}（总加载 {len(users)}）", flush=True)
+    print(f"[BaselineChain] Users pending evaluation: {n_users} (total loaded {len(users)})", flush=True)
 
     if n_users == 0:
-        print("[BaselineChain] 无待评估用户，退出", flush=True)
+        print("[BaselineChain] No users pending evaluation, exiting", flush=True)
         return
 
-    # 创建输出目录与文件句柄（resume 时不截断）
+    # Create output directories and file handles (don't truncate on resume)
     method_files = {}
     for m in methods:
         mp = method_paths[m]
@@ -252,9 +252,9 @@ def run_baseline_comparison_parallel(
             mp.open("w", encoding="utf-8").close()
         method_files[m] = mp.open("a", encoding="utf-8")
 
-    print(f"[BaselineChain] 输出目录: {comparison_root}", flush=True)
+    print(f"[BaselineChain] Output directory: {comparison_root}", flush=True)
 
-    # 准备并行任务
+    # Prepare parallel tasks
     effective_procs = min(user_processes, n_users)
     jobs = [
         (
@@ -276,9 +276,9 @@ def run_baseline_comparison_parallel(
         for i, user in enumerate(users_work)
     ]
 
-    print(f"[BaselineChain] 启动 {effective_procs} 个并行进程...", flush=True)
+    print(f"[BaselineChain] Starting {effective_procs} parallel processes...", flush=True)
 
-    # 执行并行评估
+    # Execute parallel evaluation
     run_start = time.time()
     done_count = 0
 
@@ -290,17 +290,17 @@ def run_baseline_comparison_parallel(
                 idx, results, user_elapsed = fut.result()
                 done_count += 1
 
-                # 立即写入结果
+                # Write results immediately
                 for method, result in results.items():
                     result["split"] = split
                     method_files[method].write(json.dumps(result, ensure_ascii=False) + "\n")
                     method_files[method].flush()
                     os.fsync(method_files[method].fileno())
 
-                # 打印进度
+                # Print progress
                 batch_elapsed = time.time() - run_start
                 pct = 100.0 * done_count / n_users
-                # 墙钟总耗时 / 已完成用户数（与 ETA 所用「平均每完成一人间隔」一致）
+                # Wall clock total elapsed / completed users (consistent with ETA's "average interval per completion")
                 avg_per_user = batch_elapsed / done_count
                 if done_count < n_users:
                     eta_sec = avg_per_user * (n_users - done_count)
@@ -316,29 +316,29 @@ def run_baseline_comparison_parallel(
                 print(
                     f"[{done_count}/{n_users}] ({pct:.1f}%) "
                     f"user={user_id} | "
-                    f"本用户={user_elapsed:.1f}s | "
-                    f"平均用户={avg_per_user:.1f}s | "
-                    f"总耗时={int(batch_elapsed)}s | "
+                    f"this_user={user_elapsed:.1f}s | "
+                    f"avg_user={avg_per_user:.1f}s | "
+                    f"total_elapsed={int(batch_elapsed)}s | "
                     f"ETA={eta_str}",
                     flush=True,
                 )
 
     except KeyboardInterrupt:
-        print("\n[BaselineChain] 收到中断 (Ctrl+C)，正在结束...", flush=True)
+        print("\n[BaselineChain] Received interrupt (Ctrl+C), shutting down...", flush=True)
         raise
 
     finally:
-        # 关闭所有文件
+        # Close all files
         for f in method_files.values():
             f.close()
 
     total_time = time.time() - run_start
-    print(f"\n[BaselineChain] ✅ 完成！", flush=True)
-    print(f"  处理用户: {n_users}", flush=True)
-    print(f"  总耗时: {int(total_time // 60)}m{int(total_time % 60)}s", flush=True)
-    print(f"  平均每用户: {total_time / n_users:.1f}s", flush=True)
+    print(f"\n[BaselineChain] ✅ Done!", flush=True)
+    print(f"  Processed users: {n_users}", flush=True)
+    print(f"  Total elapsed: {int(total_time // 60)}m{int(total_time % 60)}s", flush=True)
+    print(f"  Average per user: {total_time / n_users:.1f}s", flush=True)
 
-    # 打印各方法的输出文件
-    print(f"\n[BaselineChain] 输出文件:", flush=True)
+    # Print output files for each method
+    print(f"\n[BaselineChain] Output files:", flush=True)
     for m in methods:
         print(f"  {m}: {method_paths[m]}", flush=True)

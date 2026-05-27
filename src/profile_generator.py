@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-画像生成器
-- 初始画像生成：基于 W0 动作序列 + profile_generation_model_raw
-- 画像精炼：基于预测偏差生成 N 个候选画像
+Persona generator
+- Initial persona generation: based on W0 action sequence + profile_generation_model_raw
+- Persona refinement: generate N candidate personas based on prediction discrepancies
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -51,7 +51,7 @@ def _invoke_profile_llm(
     debug_focus: Optional[Dict[str, Any]] = None,
     debug_emit: bool = False,
 ) -> str:
-    """统一调度：根据 TEST_MODE / vLLM / 本地 自动选择调用方式。debug_emit 为 True 时打印 LLM-DEBUG（仅画像精炼等需观察时打开）。"""
+    """Invoke profile LLM based on mode: TEST_MODE / vLLM / local model. When debug_emit is True, emit debug logs."""
     if TEST_MODE:
         return call_llm_api(
             TEST_API_BASE,
@@ -93,14 +93,14 @@ def _invoke_profile_llm(
 
 
 def format_behavior_data(actions: List[Dict]) -> str:
-    """将动作列表格式化为画像生成所需的行为数据字符串。"""
+    """Format action list into behavior data string."""
     return "\n".join(format_action(a) for a in actions)
 
 
 def truncate_behavior_plaintext(text: str, max_chars: int) -> str:
     """
-    控制画像/动作 prompt 长度：超长时保留头尾，避免超过远端 max_context。
-    max_chars <= 0 表示不截断。
+    Control persona/action prompt length: preserve head and tail when too long to avoid exceeding remote max_context.
+    max_chars <= 0 means no truncation.
     """
     mc = int(max_chars)
     if mc <= 0 or len(text) <= mc:
@@ -123,10 +123,10 @@ def truncate_behavior_plaintext(text: str, max_chars: int) -> str:
 
 def profile_candidate_source(candidate_index: int, num_candidates: int) -> str:
     """
-    与 generate_candidate_profiles 中候选顺序一致：
-    下标 ∈ [0, n_base) 为 base（本地 transformers 或 PROFILE_API / vLLM）；
-    ∈ [n_base, n) 为 commercial（ENABLE_COMMERCIAL_PROFILE 且比例>0 时）。
-    初始画像 S0 仅走 base，见 generate_initial_profile。
+    Consistent with candidate order in generate_candidate_profiles:
+    Index ∈ [0, n_base) is base (local transformers or PROFILE_API / vLLM);
+    ∈ [n_base, n) is commercial (when ENABLE_COMMERCIAL_PROFILE and ratio > 0).
+    Initial persona S0 only uses base, see generate_initial_profile.
     """
     n = int(num_candidates)
     if n <= 0:
@@ -145,7 +145,7 @@ def generate_initial_profile(
     max_new_tokens: int = MAX_NEW_TOKENS_PROFILE,
 ) -> str:
     """
-    使用 W0 窗口动作生成初始用户画像 S0。
+    Generate initial user persona S0 using W0 window actions.
     """
     behavior_data = format_behavior_data(actions)
     behavior_data = truncate_behavior_plaintext(
@@ -182,7 +182,7 @@ def _invoke_commercial_profile_llm(
     debug_focus: Optional[Dict[str, Any]] = None,
     debug_emit: bool = False,
 ) -> str:
-    """调用商用画像模型（OpenAI 兼容 API）。"""
+    """Invoke commercial profile LLM (OpenAI API)."""
     return call_llm_api(
         OPENAI_BASE_URL,
         PROFILE_MODEL,
@@ -209,8 +209,8 @@ def generate_candidate_profiles(
     workers: int = DPO_WORKERS,
 ) -> List[str]:
     """
-    基于预测偏差对原始画像进行精炼，生成 N 个候选画像。
-    通过调高 temperature 获得多样性。
+    Refine original persona based on prediction discrepancies, generate N candidate personas.
+    Increase diversity through higher temperature.
     """
     if TEST_MODE:
         n = TEST_NUM_CANDIDATES
@@ -232,7 +232,7 @@ def generate_candidate_profiles(
     n_base = n - n_commercial
     if cfg.DEBUG_LLM:
         print(
-            f"  [ProfileGen] 候选画像来源分配：base={n_base}, commercial={n_commercial} "
+            f"  [ProfileGen] Candidate distribution: base={n_base}, commercial={n_commercial} "
             f"(ratio={effective_ratio}, enabled={ENABLE_COMMERCIAL_PROFILE})",
             flush=True,
         )
@@ -247,7 +247,7 @@ def generate_candidate_profiles(
         use_commercial = i >= n_base
         provider = "commercial" if use_commercial else "base"
         if cfg.DEBUG_LLM:
-            print(f"  [ProfileGen] 生成候选画像 {i+1}/{n} (source={provider}) ...", flush=True)
+            print(f"  [ProfileGen] Generating candidate {i+1}/{n} (source={provider}) ...", flush=True)
         if use_commercial:
             profile = _invoke_commercial_profile_llm(
                 SYSTEM_INSTRUCTION_REFINEMENT,

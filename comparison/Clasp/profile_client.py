@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-DPO 微调后画像：OpenAI 兼容 API 调用，与主项目 `src.config` 中
-PROFILE_API_BASE / PROFILE_API_MODEL 对齐；可在构造时显式覆盖，避免改全局 config。
+DPO ：OpenAI  API ， `src.config` 
+PROFILE_API_BASE / PROFILE_API_MODEL ；， config。
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from src.prompts import FREE_FORM_PROMPT, SYSTEM_INSTRUCTION_PROFILE
 
 @dataclass
 class ProfileServiceConfig:
-    """画像生成服务端点；默认从 src.config 读取。"""
+    """； src.config 。"""
 
     api_base: str
     model_name: str
@@ -40,8 +40,8 @@ def load_default_profile_config() -> ProfileServiceConfig:
 
 class FinetunedProfileClient:
     """
-    用微调后的画像服务，从**单窗口动作序列**生成用户画像 S。
-    与 `generate_initial_profile` 的 prompt/格式一致，仅 api_base/model 可单独指定。
+    ，**** S。
+     `generate_initial_profile`  prompt/， api_base/model 。
     """
 
     def __init__(self, cfg: Optional[ProfileServiceConfig] = None):

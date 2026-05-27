@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-统一管理提示词模板（画像生成/画像精炼/动作预测）。
+Unified prompt template management (persona generation/refinement/action prediction).
 """
 
 # =========================
-# 画像生成（S0）
+# Persona Generation (S0)
 # =========================
 SYSTEM_INSTRUCTION_PROFILE = (
-    "You are an expert in computational social behavior and user modeling. "
-    "Convert noisy user action traces into an abstract persona for simulation and prediction. "
-    "Do not copy long raw texts verbatim; summarize into stable traits, habits, interests, and style."
+ "You are an expert in computational social behavior and user modeling. "
+ "Convert noisy user action traces into an abstract persona for simulation and prediction. "
+ "Do not copy long raw texts verbatim; summarize into stable traits, habits, interests, and style."
 )
 
 
@@ -31,11 +31,11 @@ User Profile:
 
 
 # =========================
-# 画像精炼（候选画像）
+# Persona Refinement (Candidate Personas)
 # =========================
 SYSTEM_INSTRUCTION_REFINEMENT = (
-    "You refine an existing user persona according to prediction errors. "
-    "Keep useful stable traits, correct mismatches, and output one improved persona only."
+ "You refine an existing user persona according to prediction errors. "
+ "Keep useful stable traits, correct mismatches, and output one improved persona only."
 )
 
 PROFILE_REFINEMENT_PROMPT = """Old persona:
@@ -49,28 +49,28 @@ Please output a revised persona that better explains actual behavior and keeps g
 
 
 def build_profile_refinement_prompt_messages(
-    old_persona: str,
-    behavior_discrepancies: str,
+ old_persona: str,
+ behavior_discrepancies: str,
 ) -> list[dict[str, str]]:
-    """构造对话式 prompt（供 DPO/SFT 等训练格式使用）。"""
-    user_block = PROFILE_REFINEMENT_PROMPT.format(
-        old_persona=old_persona,
-        behavior_discrepancies=behavior_discrepancies,
-    )
-    return [
-        {"role": "system", "content": SYSTEM_INSTRUCTION_REFINEMENT},
-        {"role": "user", "content": user_block},
-    ]
+ """Build prompt (DPO/SFT). """
+ user_block = PROFILE_REFINEMENT_PROMPT.format(
+ old_persona=old_persona,
+ behavior_discrepancies=behavior_discrepancies,
+)
+ return [
+ {"role": "system", "content": SYSTEM_INSTRUCTION_REFINEMENT},
+ {"role": "user", "content": user_block},
+]
 
 
 # =========================
-# 动作预测（决策 + 内容）
+# Action Prediction (Decision + Content)
 # =========================
 AVAILABLE_ACTIONS = "post, reply, repost, like"
 
 DECISION_INSTRUCTION = (
-    "Predict the most likely next user action type from the available set. "
-    "Return one token only: post/reply/repost/like."
+ "Predict the most likely next user action type from the available set. "
+ "Return one token only: post/reply/repost/like."
 )
 
 DECISION_INPUT_TEMPLATE = """Target user profile:
@@ -89,8 +89,8 @@ Answer with exactly one action label.
 """
 
 CONTENT_INSTRUCTION = (
-    "Generate the likely text content for the user's action. "
-    "Return plain content only, no extra explanation."
+ "Generate the likely text content for the user's action. "
+ "Return plain content only, no extra explanation."
 )
 
 CONTENT_INPUT_TEMPLATE = """Target user profile:
@@ -107,7 +107,7 @@ Generate the text content:
 
 
 # =========================
-# 偏差文本模板（供画像精炼）
+# Discrepancy Text Template (for persona refinement)
 # =========================
 DISCREPANCY_TEMPLATE = """Scenario [{idx}]: {scenario_context}
 {object_block}Predicted action: {predicted_action}

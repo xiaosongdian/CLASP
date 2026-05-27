@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-窗口切分器：将用户动作序列切分为 num_windows 个窗口。
+Window splitter: split user action sequence into num_windows windows.
 
-模式 contiguous（默认）：按时间顺序连续切块，每窗 window_size 条，
-需 actions 不少于 window_size * num_windows。
+Mode contiguous (default): split sequentially by time, window_size actions per window,
+requires actions >= window_size * num_windows.
 
-模式 monthly_chain：连续 MONTHLY_CHAIN_NUM_MONTHS（默认 6）个自然月，每月 MONTHLY_CHAIN_WINDOWS_PER_MONTH（默认 1）窗，
-在全月时间跨度内均匀抽取 actions_per_window 条（总窗数 = NUM_WINDOWS_EVAL_CHAIN）。
+Mode monthly_chain: consecutive MONTHLY_CHAIN_NUM_MONTHS (default 6) natural months, MONTHLY_CHAIN_WINDOWS_PER_MONTH (default 1) windows per month,
+evenly sample actions_per_window actions within full month time span (total windows = NUM_WINDOWS_EVAL_CHAIN).
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ MonthKey = Tuple[int, int]
 
 
 def _action_timestamp(action: Dict) -> Optional[float]:
-    """解析动作为可用于排序的时间戳（秒）。优先 date=YYYYMMDDHHMM，其次 timestamp 字符串。"""
+    """Extract timestamp from action. date=YYYYMMDDHHMM format, fallback to timestamp field."""
     d = action.get("date")
     if isinstance(d, str) and len(d) >= 8 and d[:8].isdigit():
         y, mo, day = int(d[0:4]), int(d[4:6]), int(d[6:8])
@@ -58,7 +58,7 @@ def _action_timestamp(action: Dict) -> Optional[float]:
 
 
 def _sort_actions_by_time(actions: List[Dict]) -> List[Dict]:
-    """按解析时间排序；无法解析的排在后面（一般不会进入月度分组）。"""
+    """Sort actions by time; stable sort for same timestamp."""
 
     def key(a: Dict) -> Tuple[float, str, str]:
         t = _action_timestamp(a)
@@ -73,9 +73,9 @@ def _sort_actions_by_time(actions: List[Dict]) -> List[Dict]:
 
 def _evenly_spaced_sample_by_time(sorted_actions: List[Dict], n: int) -> Optional[List[Dict]]:
     """
-    在该段动作的时间区间 [t_first, t_last] 上等距取 n 个目标时刻，
-    每个时刻选时间上最近的一条动作（不重复选同一条）。
-    若时间坍缩为一点则退回按索引均匀抽样。
+    On time interval [t_first, t_last] of this action segment, evenly space n target times,
+    for each time select the temporally nearest action (no duplicate selection).
+    If time collapses to a point, fall back to index-based even sampling.
     """
     m = len(sorted_actions)
     if m < n or n <= 0:
@@ -109,7 +109,7 @@ def _evenly_spaced_sample_by_time(sorted_actions: List[Dict], n: int) -> Optiona
 
 
 def _month_key(action: Dict) -> Optional[MonthKey]:
-    """从动作的 date / timestamp 解析到 (year, month)；失败返回 None。"""
+    """Extract (year, month) from date / timestamp field; return None if unable."""
     d = action.get("date")
     if isinstance(d, str) and len(d) >= 6 and d[:6].isdigit():
         return int(d[:4]), int(d[4:6])
@@ -132,7 +132,7 @@ def _next_month(y: int, m: int) -> MonthKey:
 
 
 def _evenly_spaced_sample(sorted_actions: List[Dict], n: int) -> Optional[List[Dict]]:
-    """在时间有序的列表上均匀取 n 条（含首尾倾向），避免扎堆在同一天。"""
+    """Evenly sample n actions from sorted list by index."""
     m = len(sorted_actions)
     if m < n or n <= 0:
         return None
@@ -151,9 +151,9 @@ def split_user_into_windows(
     num_windows: int = NUM_WINDOWS,
 ) -> Optional[List[List[Dict]]]:
     """
-    将一个用户的动作序列切分为 num_windows 个等长窗口。
-    返回 [W0, W1, ..., W(num_windows-1)]，每个窗口是 window_size 条动作的列表。
-    动作数不足时返回 None。
+    Split one user's action sequence into num_windows equal-length windows.
+    Return [W0, W1, ..., W(num_windows-1)], each window is a list of window_size actions.
+    Return None if insufficient actions.
     """
     required = window_size * num_windows
     if len(actions) < required:
@@ -174,12 +174,12 @@ def split_user_into_windows_monthly_chain(
     windows_per_month: int = MONTHLY_CHAIN_WINDOWS_PER_MONTH,
 ) -> Optional[Tuple[List[List[Dict]], Dict]]:
     """
-    连续自然月窗口链：找到最早的连续 num_months 个日历月。
+    Consecutive natural month window chain: find earliest consecutive num_months calendar months.
 
-    - windows_per_month==1（默认）：每月 1 窗，在该月整段动作的时间跨度内均匀抽 actions_per_window 条。
-    - windows_per_month==2：每月按时间中点分为两半（两半时长相等），两半各均匀抽 actions_per_window 条。
+    - windows_per_month==1 (default): 1 window per month, evenly sample actions_per_window actions within that month's full time span.
+    - windows_per_month==2: split each month by time midpoint into two halves (equal duration), evenly sample actions_per_window from each half.
 
-    总窗数须为 num_months * windows_per_month（默认 6×1=6）。
+    Total windows must be num_months * windows_per_month (default 6×1=6).
     """
     if actions_per_window <= 0 or num_months <= 0:
         return None
@@ -279,14 +279,14 @@ def prepare_windowed_data(
     actions_per_month: Optional[int] = None,
 ) -> Dict:
     """
-    读取一个社区的 jsonl 文件，对每个用户做窗口切分，
-    输出包含 windows 字段的 jsonl 文件。
-    返回统计摘要。
+    Read a community's jsonl file, perform window splitting for each user,
+    output jsonl file with windows field.
+    Return statistics summary.
 
     split_mode:
-      - contiguous: 每窗 window_size 条连续动作；
-      - monthly_chain: 连续 MONTHLY_CHAIN_NUM_MONTHS 个月、每月 MONTHLY_CHAIN_WINDOWS_PER_MONTH 窗，
-        在全月（或半月）时间轴上均匀抽样；总窗数 = NUM_WINDOWS_EVAL_CHAIN。
+      - contiguous: window_size consecutive actions per window;
+      - monthly_chain: consecutive MONTHLY_CHAIN_NUM_MONTHS months, MONTHLY_CHAIN_WINDOWS_PER_MONTH windows per month,
+        evenly sample on full month (or half-month) time axis; total windows = NUM_WINDOWS_EVAL_CHAIN.
     """
     input_path = Path(input_file)
     output_path = Path(output_file)
@@ -379,7 +379,7 @@ def batch_prepare(
     split_mode: str = "contiguous",
     actions_per_month: Optional[int] = None,
 ) -> None:
-    """对指定 split 目录下的所有社区文件做窗口切分。"""
+    """ split 。"""
     nw = int(num_windows) if num_windows is not None else int(NUM_WINDOWS)
     in_dir = Path(input_dir) / split
     out_dir = Path(output_dir) / split
@@ -398,30 +398,30 @@ def batch_prepare(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="窗口切分用户动作序列")
-    parser.add_argument("--input", required=True, help="输入 jsonl 文件或目录")
-    parser.add_argument("--output", required=True, help="输出 jsonl 文件或目录")
-    parser.add_argument("--split", default=None, help="split 名称（目录模式时使用）")
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("--input", required=True, help=" jsonl ")
+    parser.add_argument("--output", required=True, help=" jsonl ")
+    parser.add_argument("--split", default=None, help="split （）")
     parser.add_argument(
         "--window-size",
         type=int,
         default=WINDOW_SIZE,
-        help=f"每窗动作数（默认 {WINDOW_SIZE}）",
+        help=f"（ {WINDOW_SIZE}）",
     )
     parser.add_argument(
         "--num-windows",
         type=int,
         default=None,
         help=(
-            "窗口个数；默认与训练一致 config.NUM_WINDOWS。"
-            f"评估链 S0→W1…需 W0..W5 时请设 {NUM_WINDOWS_EVAL_CHAIN}（或显式传参）。"
+            "； config.NUM_WINDOWS。"
+            f" S0→W1… W0..W5  {NUM_WINDOWS_EVAL_CHAIN}（）。"
         ),
     )
     parser.add_argument(
         "--split-mode",
         choices=("contiguous", "monthly_chain"),
         default="contiguous",
-        help="contiguous=顺序切块；monthly_chain=连续自然月链（见 config MONTHLY_CHAIN_*）",
+        help="contiguous=；monthly_chain=（ config MONTHLY_CHAIN_*）",
     )
     parser.add_argument(
         "--actions-per-month",
@@ -429,8 +429,8 @@ if __name__ == "__main__":
         default=None,
         metavar="N",
         help=(
-            "仅 monthly_chain：每个时间窗均匀抽取条数；默认用 --window-size；"
-            "总 6 窗=config.MONTHLY_CHAIN_NUM_MONTHS×MONTHLY_CHAIN_WINDOWS_PER_MONTH"
+            " monthly_chain：； --window-size；"
+            " 6 =config.MONTHLY_CHAIN_NUM_MONTHS×MONTHLY_CHAIN_WINDOWS_PER_MONTH"
         ),
     )
     args = parser.parse_args()
@@ -446,11 +446,11 @@ if __name__ == "__main__":
             else args.window_size
         )
         if apw <= 0:
-            print("monthly_chain：每窗条数须为正（--actions-per-month 或 --window-size）")
+            print("monthly_chain：（--actions-per-month  --window-size）")
             raise SystemExit(2)
     else:
         if args.actions_per_month is not None:
-            print("提示: --actions-per-month 仅在 --split-mode monthly_chain 下使用")
+            print(": --actions-per-month  --split-mode monthly_chain ")
 
     inp = Path(args.input)
     if inp.is_file():
@@ -473,4 +473,4 @@ if __name__ == "__main__":
             actions_per_month=args.actions_per_month,
         )
     else:
-        print("请指定单个 jsonl 文件，或指定目录 + --split 参数")
+        print(" jsonl ， + --split ")

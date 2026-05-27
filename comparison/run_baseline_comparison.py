@@ -1,63 +1,5 @@
 #!/usr/bin/env python3
-"""
-统一测试集上的多基线窗口链评估（不生成 DPO 对）。
 
-默认基线（`--methods` 可选）：
-  - static_s0：W0 初始画像固定不变；
-  - prefix_refresh：每步用已观测前缀 W0..W_{t+1} 重算「初始画像」；
-  - clasp_online：每步按预测误差精炼画像；
-  - clasp_online_no_hist：与 clasp_online 相同，但动作 prompt 不含观测历史（与 ``--no-action-prompt-observed-history`` 效果一致，且仅作用于该方法）；
-  - history_only：不生成画像；每步将 **W0..W_t** 全部已观测动作写入动作侧「画像」槽位预测 W_{t+1}，Recent user actions 置空（避免重复），总长受 config 约束；
-  - incremental_persona：S_{t-1} + 当前窗行为（无误差信号）精炼。
-
-注意：所有方法已统一历史输入机制（profile_suffix），确保公平对比画像更新策略。
-
-默认每种 method 单独目录（避免混在同一 jsonl）：
-  output/comparison/<method>/baseline_chain_<split或标签>_<数据集类型>.jsonl
-  数据集类型：contiguous（顺序切块窗口化）或 monthly_chain（自然月链窗口化）
-  作图：output/comparison/<method>/<plot 文件名>_F|L|Q.png
-
-示例（仓库根目录）：
-  # 多方法 → clasp_online、prefix_refresh、static_s0 各一份 jsonl
-  python -m comparison.run_baseline_comparison \\
-    --split test --skip-window-split \\
-    --windowed-root output/windowed \\
-    --methods static_s0,prefix_refresh,clasp_online
-
-  # 使用 monthly_chain 窗口化数据（默认 glob：monthly_chain_community_*.jsonl）
-  python -m comparison.run_baseline_comparison \\
-    --split test --skip-window-split \\
-    --windowed-root output/windowed \\
-    --windowed-dataset monthly_chain \\
-    --methods static_s0
-
-  # 单社区 + 作图（图在同 method 目录下）
-  python -m comparison.run_baseline_comparison \\
-    --input-jsonl output/windowed/test/community_3.jsonl \\
-    --methods clasp_online \\
-    --plot clasp_c3.png
-
-  # 旧版：所有 method 合并为一个 jsonl
-  python -m comparison.run_baseline_comparison \\
-    --combined-jsonl \\
-    --output output/comparison/baseline_chain_test.jsonl \\
-    --methods static_s0,prefix_refresh,clasp_online
-
-  # 断点续跑：跳过输出 jsonl 中已成功完成的用户（无 error），追加新结果
-  python -m comparison.run_baseline_comparison --split test --resume \\
-    --skip-window-split --comparison-root output/comparison
-
-  # 动作 prompt 不载入观测历史（消融 profile 后历史块 / Recent user actions）
-  python -m comparison.run_baseline_comparison --methods clasp_online \\
-    --no-action-prompt-observed-history ...
-
-  # 关闭链末三窗口评估（减少额外动作 API；输出无 three_window_evaluation）
-  python -m comparison.run_baseline_comparison --methods static_s0 \\
-    --no-three-window-evaluation ...
-
-  # 每社区只评测前 100 个用户（默认即 100；全量可设 --max-users-per-community 0）
-  python -m comparison.run_baseline_comparison --max-users-per-community 100 ...
-"""
 from __future__ import annotations
 
 import argparse
@@ -73,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# 目录模式下默认匹配的窗口化 jsonl（可被 --file-glob 覆盖）
 WINDOWED_DATASET_FILE_GLOBS = {
     "contiguous": "community_*.jsonl",
     "monthly_chain": "monthly_chain_community_*.jsonl",
@@ -81,7 +22,6 @@ WINDOWED_DATASET_FILE_GLOBS = {
 
 
 def _output_stem_with_dataset(base_stem: str, windowed_dataset: str) -> str:
-    """为输出 jsonl 主干追加 _<数据集类型>，避免 contiguous / monthly_chain 结果互相覆盖。"""
     suf = f"_{windowed_dataset}"
     return base_stem if base_stem.endswith(suf) else base_stem + suf
 
@@ -114,13 +54,12 @@ def _parse_methods(s: str) -> List[str]:
     parts = [p.strip() for p in s.split(",") if p.strip()]
     bad = [p for p in parts if p not in VALID_METHODS]
     if bad:
-        print(f"[BaselineChain] 未知 method: {bad}，可选: {sorted(VALID_METHODS)}", flush=True)
+        print(f"[BaselineChain] Unknown method: {bad}, available: {sorted(VALID_METHODS)}", flush=True)
         sys.exit(1)
     return parts
 
 
 def _print_aggregate(rows: List[Dict[str, Any]]) -> None:
-    """按 method 汇总 mean_Q，以及各 step 的 F/L/Q。"""
     by_method: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for r in rows:
         if r.get("error"):
@@ -129,7 +68,7 @@ def _print_aggregate(rows: List[Dict[str, Any]]) -> None:
         if m:
             by_method[str(m)].append(r)
 
-    print("[BaselineChain] ========== 汇总（跳过含 error 的记录）==========", flush=True)
+    print("[BaselineChain] ========== Summary (skipping records with errors) ==========", flush=True)
     for method in sorted(by_method.keys()):
         items = by_method[method]
         n = len(items)
@@ -144,8 +83,8 @@ def _print_aggregate(rows: List[Dict[str, Any]]) -> None:
         means, _ = aggregate_flq_by_step(items, method=None)
         step_q_only = {k: round(v["Q"], 4) for k, v in sorted(means.items())}
         print(
-            f"  [{method}] 用户数={n} | 平均 mean_Q(全前向步)={mean_overall:.4f} | "
-            f"mean_Q_chain(同左，兼容字段)={mean_chain:.4f} | 各步平均Q={step_q_only}",
+            f"  [{method}] num_users={n} | avg mean_Q(all forward steps)={mean_overall:.4f} | "
+            f"mean_Q_chain(same as above, compat field)={mean_chain:.4f} | per-step avg Q={step_q_only}",
             flush=True,
         )
         print_step_table(means, label=method)
@@ -194,48 +133,48 @@ def run(
 
     if always_accept_refinement and any(m in CLASP_ONLINE_VARIANTS for m in methods):
         print(
-            "[BaselineChain] clasp_online / clasp_online_no_hist 使用 --always-accept-refinement："
-            "每步始终采用新精炼画像（空则保留旧画像），不比 Q。",
+            "[BaselineChain] Clasp family (clasp_online / *_ablate_*) with --always-accept-refinement: "
+            "Always adopt new refined persona at each step (keep old if empty), no Q comparison.",
             flush=True,
         )
 
     if not action_prompt_include_observed_history:
         print(
-            "[BaselineChain] --no-action-prompt-observed-history："
-            "动作预测 prompt 不含观测历史（仅画像 + Current scenario）。",
+            "[BaselineChain] --no-action-prompt-observed-history: "
+            "Action prediction prompt excludes observed history (only persona + Current scenario).",
             flush=True,
         )
 
     if not enable_three_window_evaluation:
         print(
-            "[BaselineChain] --no-three-window-evaluation："
-            "跳过链末三窗口对比（jsonl 中无 three_window_evaluation）。",
+            "[BaselineChain] --no-three-window-evaluation: "
+            "Skip three-window comparison at chain end (no three_window_evaluation in jsonl).",
             flush=True,
         )
 
     if max_users_per_community > 0:
         print(
-            f"[BaselineChain] 每社区最多评测用户数: {max_users_per_community} "
-            f"（超出输入顺序跳过；0=不限制）",
+            f"[BaselineChain] Max users per community: {max_users_per_community} "
+            f"(skip excess in input order; 0=no limit)",
             flush=True,
         )
 
     if input_jsonl is not None:
         input_jsonl = Path(input_jsonl).resolve()
         if not input_jsonl.is_file():
-            print(f"[BaselineChain] 不是文件: {input_jsonl}", flush=True)
+            print(f"[BaselineChain] Not a file: {input_jsonl}", flush=True)
             sys.exit(1)
         files = [input_jsonl]
     else:
         raw_split_dir = data_dir / split
         if not raw_split_dir.is_dir():
-            print(f"[BaselineChain] 不存在目录: {raw_split_dir}", flush=True)
+            print(f"[BaselineChain] Directory does not exist: {raw_split_dir}", flush=True)
             sys.exit(1)
 
         out_split = windowed_root / split
         if not skip_window_split:
             out_split.mkdir(parents=True, exist_ok=True)
-            print(f"[BaselineChain] 窗口切分: {raw_split_dir} -> {out_split}", flush=True)
+            print(f"[BaselineChain] Window splitting: {raw_split_dir} -> {out_split}", flush=True)
             from src.config import (
                 MONTHLY_CHAIN_NUM_MONTHS,
                 MONTHLY_CHAIN_WINDOWS_PER_MONTH,
@@ -253,21 +192,21 @@ def run(
             if window_split_mode == "monthly_chain":
                 if apm is None or apm <= 0:
                     print(
-                        "[BaselineChain] monthly_chain 需要有效的每窗条数：请设 "
-                        "--actions-per-month，或使用默认 --window-size（等于 config.WINDOW_SIZE）。",
+                        "[BaselineChain] monthly_chain requires valid actions per window: please set "
+                        "--actions-per-month, or use default --window-size (equals config.WINDOW_SIZE).",
                         flush=True,
                     )
                     sys.exit(1)
                 print(
-                    f"[BaselineChain] 切分模式=monthly_chain：连续 {MONTHLY_CHAIN_NUM_MONTHS} 个自然月，"
-                    f"每月 {MONTHLY_CHAIN_WINDOWS_PER_MONTH} 个时间窗，每窗 {apm} 条 "
-                    f"（共 {apm * NUM_WINDOWS_EVAL_CHAIN} 条，{NUM_WINDOWS_EVAL_CHAIN} 窗 W0..W5）",
+                    f"[BaselineChain] Split mode=monthly_chain: {MONTHLY_CHAIN_NUM_MONTHS} consecutive natural months, "
+                    f"{MONTHLY_CHAIN_WINDOWS_PER_MONTH} windows per month, {apm} actions per window "
+                    f"(total {apm * NUM_WINDOWS_EVAL_CHAIN} actions, {NUM_WINDOWS_EVAL_CHAIN} windows W0..W5)",
                     flush=True,
                 )
             else:
                 print(
-                    f"[BaselineChain] 切分模式=contiguous：每窗 {ws} 动作, "
-                    f"num_windows={nw}（W0..W{nw - 1}）",
+                    f"[BaselineChain] Split mode=contiguous: {ws} actions per window, "
+                    f"num_windows={nw} (W0..W{nw - 1})",
                     flush=True,
                 )
             batch_prepare(
@@ -282,7 +221,7 @@ def run(
         else:
             if not out_split.is_dir():
                 print(
-                    f"[BaselineChain] 已指定 --skip-window-split 但缺少: {out_split}",
+                    f"[BaselineChain] --skip-window-split specified but missing: {out_split}",
                     flush=True,
                 )
                 sys.exit(1)
@@ -290,22 +229,22 @@ def run(
         files = sorted(out_split.glob(file_glob))
         if not files:
             print(
-                f"[BaselineChain] 无匹配文件: {out_split}/{file_glob}",
+                f"[BaselineChain] No matching files: {out_split}/{file_glob}",
                 flush=True,
             )
             sys.exit(1)
 
     if not skip_preflight and not preflight_check(comparison_methods=methods):
-        print("[BaselineChain] 预检失败", flush=True)
+        print("[BaselineChain] Preflight check failed", flush=True)
         sys.exit(1)
 
     do_parallel = bool(use_parallel and user_processes > 1)
     if resume and do_parallel:
-        print("[BaselineChain] --resume：并行模式将追加写入并跳过已完成用户。", flush=True)
+        print("[BaselineChain] --resume: Parallel mode will append and skip completed users.", flush=True)
 
-    # 决定是否使用并行化
+    # Decide whether to use parallelization
     if do_parallel:
-        print(f"[BaselineChain] 使用并行模式: {user_processes} 个进程", flush=True)
+        print(f"[BaselineChain] Using parallel mode: {user_processes} processes", flush=True)
         from comparison.run_baseline_parallel import run_baseline_comparison_parallel
 
         run_baseline_comparison_parallel(
@@ -328,14 +267,14 @@ def run(
             max_users_per_community=max_users_per_community,
         )
 
-        # 并行模式不支持绘图，如果需要绘图，提示用户
+        # Parallel mode does not support plotting; notify user if plotting is requested
         if plot_path is not None:
-            print("[BaselineChain] 注意: 并行模式暂不支持绘图，请使用串行模式 (--no-parallel)", flush=True)
+            print("[BaselineChain] Note: Parallel mode does not support plotting, please use serial mode (--no-parallel)", flush=True)
 
         return
 
-    # 串行模式
-    print(f"[BaselineChain] 使用串行模式", flush=True)
+    # Serial mode
+    print(f"[BaselineChain] Using serial mode", flush=True)
 
     sem_dev = scorer_device
     if sem_dev is None or str(sem_dev).strip() == "":
@@ -363,12 +302,12 @@ def run(
             if not resume:
                 _snap_fp.unlink(missing_ok=True)
                 print(
-                    f"[BaselineChain] {sm} 画像快照（单文件）: {_snap_fp}",
+                    f"[BaselineChain] {sm} persona snapshots (single file): {_snap_fp}",
                     flush=True,
                 )
             else:
                 print(
-                    f"[BaselineChain] {sm} 画像快照追加: {_snap_fp}",
+                    f"[BaselineChain] {sm} persona snapshots append: {_snap_fp}",
                     flush=True,
                 )
             clasp_snap_by_method[sm] = snap_dir
@@ -382,7 +321,7 @@ def run(
         for p in method_paths.values():
             p.parent.mkdir(parents=True, exist_ok=True)
         print(
-            "[BaselineChain] 按方法分目录输出: "
+            "[BaselineChain] Output by method directory: "
             + ", ".join(f"{m} -> {method_paths[m]}" for m in methods),
             flush=True,
         )
@@ -405,7 +344,7 @@ def run(
             combined_jsonl=output_jsonl if not separate_by_method else None,
         )
         stats = {m: len(completed_by_m.get(m) or set()) for m in methods}
-        print(f"[BaselineChain] --resume: 各 method 已成功用户数（将跳过）: {stats}", flush=True)
+        print(f"[BaselineChain] --resume: Completed users per method (will skip): {stats}", flush=True)
 
     write_mode = "a" if resume else "w"
 
@@ -474,8 +413,8 @@ def run(
                     total_lines += 1
                     if total_lines % 10 == 0:
                         print(
-                            f"[BaselineChain] 已扫描 {total_lines} 个输入用户"
-                            f"（本 run 新写入 {len(new_rows)} 行）…",
+                            f"[BaselineChain] Scanned {total_lines} input users "
+                            f"(this run wrote {len(new_rows)} new lines)...",
                             flush=True,
                         )
 
@@ -487,14 +426,14 @@ def run(
     dt = time.time() - t0
     if separate_by_method:
         print(
-            f"[BaselineChain] 完成: 扫描输入用户 {total_lines} 个, 本 run 新写入 {len(new_rows)} 行, "
-            f"汇总共 {len(all_rows)} 行, 耗时 {dt:.1f}s；见各 method 目录下 {output_stem}.jsonl",
+            f"[BaselineChain] Done: Scanned {total_lines} input users, this run wrote {len(new_rows)} new lines, "
+            f"total {len(all_rows)} lines, elapsed {dt:.1f}s; see {output_stem}.jsonl under each method directory",
             flush=True,
         )
     else:
         print(
-            f"[BaselineChain] 完成: 扫描输入用户 {total_lines} 个, 本 run 新写入 {len(new_rows)} 行, "
-            f"汇总共 {len(all_rows)} 行, 耗时 {dt:.1f}s -> {output_jsonl}",
+            f"[BaselineChain] Done: Scanned {total_lines} input users, this run wrote {len(new_rows)} new lines, "
+            f"total {len(all_rows)} lines, elapsed {dt:.1f}s -> {output_jsonl}",
             flush=True,
         )
     _print_aggregate(all_rows)
@@ -517,7 +456,7 @@ def run(
                     trim_sides=str(plot_trim_sides),
                 )
                 print(
-                    f"[BaselineChain] 作图去极值 mean_Q "
+                    f"[BaselineChain] Plot outlier removal mean_Q "
                     f"(sides={plot_trim_sides}) {trim_t*100:.1f}%: "
                     f"dropped={tmeta.get('dropped', 0)} plot_users={len(sub_plot)}/{len(sub)}",
                     flush=True,
@@ -526,7 +465,7 @@ def run(
                     sub_plot = sub
             elif trim_t is not None and trim_t > 0 and scope == "step":
                 print(
-                    f"[BaselineChain] 作图 per-step trim (sides={plot_trim_sides}) "
+                    f"[BaselineChain] Plot per-step trim (sides={plot_trim_sides}) "
                     f"{trim_t*100:.1f}% basis={plot_step_trim_basis} | users={len(sub)}",
                     flush=True,
                 )
@@ -564,68 +503,68 @@ def run(
                 n_users=len(sub_plot),
             )
             for p in paths:
-                print(f"[BaselineChain] 已保存: {p}", flush=True)
+                print(f"[BaselineChain] Saved: {p}", flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="测试集窗口链：多基线 F/L/Q（不构造 DPO）"
+        description="Test set window chain: multi-baseline F/L/Q (no DPO construction)"
     )
     parser.add_argument(
         "--split",
         default="test",
-        help="data 下子目录名，如 test / eval_unseen",
+        help="Subdirectory name under data, e.g. test / eval_unseen",
     )
     parser.add_argument(
         "--data-dir",
         type=Path,
         default=ROOT / "data",
-        help="含原始 jsonl 的数据根目录",
+        help="Data root directory containing raw jsonl files",
     )
     parser.add_argument(
         "--windowed-root",
         type=Path,
         default=ROOT / "output" / "windowed_eval_chain",
         help=(
-            "窗口化 jsonl 根目录：读取 <root>/<split>/；文件名由 "
-            "--windowed-dataset 或 --file-glob 决定（如 output/windowed/test）"
+            "Windowed jsonl root directory: reads <root>/<split>/; filename determined by "
+            "--windowed-dataset or --file-glob (e.g. output/windowed/test)"
         ),
     )
     parser.add_argument(
         "--comparison-root",
         type=Path,
         default=ROOT / "output" / "comparison",
-        help="评估结果根目录；默认按 method 写入 <root>/<method>/…",
+        help="Evaluation results root directory; by default writes to <root>/<method>/...",
     )
     parser.add_argument(
         "--combined-jsonl",
         action="store_true",
-        help="所有 method 合并写入同一个 jsonl（旧版行为）；默认每种方法单独目录+单独文件",
+        help="Write all methods to same jsonl (legacy behavior); default is separate directory+file per method",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=None,
         help=(
-            "合并模式(--combined-jsonl)：完整输出文件路径（文件名自定，建议含数据集类型以免混淆）。"
-            "分目录模式：仅用作输出文件名主干（默认 baseline_chain_<split|输入stem>_<windowed-dataset>），"
-            "实际路径为 <comparison-root>/<method>/<stem>.jsonl"
+            "Combined mode (--combined-jsonl): full output file path (custom filename, suggest including dataset type to avoid confusion). "
+            "Separate directory mode: used as output filename stem only (default baseline_chain_<split|input_stem>_<windowed-dataset>), "
+            "actual path is <comparison-root>/<method>/<stem>.jsonl"
         ),
     )
     parser.add_argument(
         "--methods",
         type=str,
         default="static_s0,prefix_refresh,clasp_online",
-        help=f"逗号分隔，可选: {','.join(sorted(VALID_METHODS))}",
+        help=f"Comma-separated, available: {','.join(sorted(VALID_METHODS))}",
     )
-    parser.add_argument("--max-users", type=int, default=None, help="最多评估用户数（原始用户数）")
+    parser.add_argument("--max-users", type=int, default=None, help="Max number of users to evaluate (raw user count)")
     parser.add_argument(
         "--max-users-per-community",
         type=int,
         default=100,
         help=(
-            "每个 community_id 仅评测前 K 个用户（按各输入文件中的出现顺序）；"
-            "节省 API 时间。默认 100；设为 0 表示不限制"
+            "Evaluate only first K users per community_id (by appearance order in each input file); "
+            "saves API time. Default 100; set to 0 for no limit"
         ),
     )
     parser.add_argument(
@@ -634,65 +573,65 @@ def main() -> None:
         type=int,
         default=None,
         dest="refinement_variants",
-        help="clasp_online 每步精炼次数（默认 1=单次纠偏；>1 为消融，训练期 DPO 才需多份）",
+        help="clasp_online refinement iterations per step (default 1=single correction; >1 for ablation, DPO training needs multiple)",
     )
     parser.add_argument(
         "--workers",
         type=int,
         default=None,
-        help="候选画像线程数；默认 config.DPO_WORKERS",
+        help="Candidate persona thread count; default config.DPO_WORKERS",
     )
     parser.add_argument(
         "--user-processes",
         type=int,
         default=None,
-        help="并行处理的用户进程数；默认 config.DPO_USER_PROCESSES（多进程加速）",
+        help="Number of user processes for parallel processing; default config.DPO_USER_PROCESSES (multi-process acceleration)",
     )
     parser.add_argument(
         "--user-process-stagger",
         type=float,
         default=0.5,
-        help="多进程启动错开时间（秒），减轻 API 洪峰；默认 0.5s",
+        help="Multi-process startup stagger time (seconds) to reduce API burst; default 0.5s",
     )
     parser.add_argument(
         "--no-parallel",
         action="store_true",
-        help="禁用多进程并行，使用串行模式（调试用）",
+        help="Disable multi-process parallelism, use serial mode (for debugging)",
     )
     parser.add_argument(
         "--scorer-device",
         default="cpu",
-        help="SentenceTransformer 语义分设备（默认 cpu，避免与 GPU 上 vLLM 等争显存）；可设 cuda、cuda:0",
+        help="SentenceTransformer semantic scorer device (default cpu to avoid GPU memory contention with vLLM); can set cuda, cuda:0",
     )
     parser.add_argument(
         "--skip-preflight",
         action="store_true",
-        help="跳过 vLLM / ST 预检",
+        help="Skip vLLM / ST preflight check",
     )
     parser.add_argument(
         "--skip-window-split",
         action="store_true",
-        help="跳过窗口切分，直接使用 --windowed-root/<split>",
+        help="Skip window splitting, directly use --windowed-root/<split>",
     )
     parser.add_argument(
         "--num-windows",
         type=int,
         default=None,
-        help="窗口切分时窗口个数；默认 config.NUM_WINDOWS_EVAL_CHAIN（6=W0..W5）",
+        help="Number of windows for window splitting; default config.NUM_WINDOWS_EVAL_CHAIN (6=W0..W5)",
     )
     parser.add_argument(
         "--window-size",
         type=int,
         default=None,
-        help="窗口切分每窗动作数；默认 config.WINDOW_SIZE（contiguous）；monthly_chain 下可作每月抽取条数备用默认值",
+        help="Actions per window for window splitting; default config.WINDOW_SIZE (contiguous); for monthly_chain can serve as fallback default for actions per month",
     )
     parser.add_argument(
         "--window-split-mode",
         choices=("contiguous", "monthly_chain"),
         default="contiguous",
         help=(
-            "窗口切分策略：contiguous=顺序切块；"
-            "monthly_chain=连续自然月、每月均匀抽取（见 --actions-per-month）"
+            "Window splitting strategy: contiguous=sequential chunks; "
+            "monthly_chain=consecutive natural months, evenly sampled per month (see --actions-per-month)"
         ),
     )
     parser.add_argument(
@@ -701,24 +640,24 @@ def main() -> None:
         default=None,
         metavar="N",
         help=(
-            "仅 monthly_chain：每个时间窗的动作条数（默认与 --window-size 或 config.WINDOW_SIZE 一致）；"
-            "总窗数固定为 config.NUM_WINDOWS_EVAL_CHAIN（默认 6=连续 6 个月×每月 1 窗）。"
+            "monthly_chain only: actions per time window (default matches --window-size or config.WINDOW_SIZE); "
+            "total window count fixed at config.NUM_WINDOWS_EVAL_CHAIN (default 6=6 consecutive months×1 window per month)."
         ),
     )
     parser.add_argument(
         "--input-jsonl",
         type=Path,
         default=None,
-        help="直接指定已窗口化的单个 jsonl（不要求 data/<split> 存在）",
+        help="Directly specify a single windowed jsonl (data/<split> not required to exist)",
     )
     parser.add_argument(
         "--windowed-dataset",
         choices=tuple(WINDOWED_DATASET_FILE_GLOBS.keys()),
         default="contiguous",
         help=(
-            "已窗口化测试集类型；在未指定 --file-glob 时决定匹配模式："
-            "contiguous=顺序切块 community_*.jsonl；"
-            "monthly_chain=自然月链 monthly_chain_community_*.jsonl（见 scripts/build_monthly_chain_windowed.py）"
+            "Windowed test set type; determines matching pattern when --file-glob not specified: "
+            "contiguous=sequential chunks community_*.jsonl; "
+            "monthly_chain=natural month chain monthly_chain_community_*.jsonl (see scripts/build_monthly_chain_windowed.py)"
         ),
     )
     parser.add_argument(
@@ -727,15 +666,15 @@ def main() -> None:
         default=None,
         metavar="PATTERN",
         help=(
-            "目录模式下匹配 --windowed-root/<split>/ 下文件；默认由 --windowed-dataset 决定"
-            "（contiguous→community_*.jsonl，monthly_chain→monthly_chain_community_*.jsonl）"
+            "Directory mode file matching pattern for --windowed-root/<split>/; default determined by --windowed-dataset "
+            "(contiguous→community_*.jsonl, monthly_chain→monthly_chain_community_*.jsonl)"
         ),
     )
     parser.add_argument(
         "--plot",
         type=Path,
         default=None,
-        help="保存 F、L、Q 三张折线图（需 matplotlib）；如 output/c.png -> c_F.png, c_L.png, c_Q.png",
+        help="Save F, L, Q three line plots (requires matplotlib); e.g. output/c.png -> c_F.png, c_L.png, c_Q.png",
     )
     parser.add_argument(
         "--plot-trim-each-tail",
@@ -743,9 +682,9 @@ def main() -> None:
         default=None,
         metavar="P",
         help=(
-            "仅作图：按 mean_Q 裁剪尾部比例用户；0=不去极值；"
-            "双侧默认最低/最高各 P；单侧见 --plot-trim-sides；"
-            "省略则用 config.PLOT_TRIM_EACH_TAIL；不写回 jsonl"
+            "Plot only: trim tail fraction of users by mean_Q; 0=no outlier removal; "
+            "default both sides remove P% from low/high; single side see --plot-trim-sides; "
+            "omit to use config.PLOT_TRIM_EACH_TAIL; not written back to jsonl"
         ),
     )
     parser.add_argument(
@@ -753,8 +692,8 @@ def main() -> None:
         choices=("both", "lower", "upper"),
         default="both",
         help=(
-            "与 --plot-trim-each-tail 配合：both=最低与最高各去掉该比例；"
-            "lower=只去掉最低比例（保留高分侧）；upper=只去掉最高比例"
+            "With --plot-trim-each-tail: both=remove that fraction from low and high; "
+            "lower=remove only low fraction (keep high scores); upper=remove only high fraction"
         ),
     )
     parser.add_argument(
@@ -762,54 +701,54 @@ def main() -> None:
         choices=("user", "step"),
         default="user",
         help=(
-            "仅作图：user=按 mean_Q 整行删用户后聚合；"
-            "step=每链上窗口内去尾后再聚合（见 --plot-step-trim-basis）"
+            "Plot only: user=delete entire rows by mean_Q then aggregate; "
+            "step=trim tails within each window on chain then aggregate (see --plot-step-trim-basis)"
         ),
     )
     parser.add_argument(
         "--plot-step-trim-basis",
         choices=("deviation", "value"),
         default="deviation",
-        help="plot-trim-scope=step 时：deviation=Q−当步均值；value=当步 Q 分位",
+        help="plot-trim-scope=step: deviation=Q−step mean; value=step Q quantile",
     )
     parser.add_argument(
         "--always-accept-refinement",
         action="store_true",
-        help="仅 clasp_online：每步精炼后始终采用新画像，不与旧画像比 Q；精炼为空则保留旧画像",
+        help="clasp_online only: always adopt new persona after refinement, no Q comparison with old; keep old if refinement is empty",
     )
     parser.add_argument(
         "--resume",
         action="store_true",
         help=(
-            "断点续跑：读取当前输出 jsonl（无 error 的行视为已完成），跳过已有用户，仅追加未完成的方法；"
-            "须与本次 --comparison-root / --output / output_stem 一致。"
+            "Resume from checkpoint: read current output jsonl (rows without error treated as completed), skip existing users, only append incomplete methods; "
+            "must match this run's --comparison-root / --output / output_stem."
         ),
     )
     parser.add_argument(
         "--no-profile-snapshots",
         action="store_true",
         help=(
-            "关闭 Clasp 系画像快照（默认在运行列表含 clasp_online / clasp_online_no_hist 时，"
-            "分别写入 <comparison-root>/<method>/profile_snapshots/<output_stem>/profiles.jsonl）"
+            "Disable Clasp family persona snapshots (default enabled when run list contains clasp_online / clasp_online_no_hist / "
+            "clasp_online_ablate_*, writes to <comparison-root>/<method>/profile_snapshots/<output_stem>/profiles.jsonl respectively)"
         ),
     )
     parser.add_argument(
         "--no-action-prompt-observed-history",
         action="store_true",
         help=(
-            "动作预测 prompt 不载入观测历史：不拼画像后的本窗行为块，"
-            "也不在 Recent user actions 中使用历史滑窗（仍保留 Current scenario 中的待预测动作上下文）；"
-            "对本次 --methods 列表中所有方法生效。"
-            "若要在同一评测中并列「有/无观测历史」的 Clasp，请使用 --methods 含 "
-            "clasp_online 与 clasp_online_no_hist（后者始终无观测历史，不受本开关反向打开历史）。"
+            "Action prediction prompt excludes observed history: skip behavior block after persona in this window, "
+            "also skip historical sliding window in Recent user actions (still keep action context in Current scenario); "
+            "applies to all methods in this --methods list. "
+            "To compare 'with/without observed history' Clasp in same evaluation, use --methods containing both "
+            "clasp_online and clasp_online_no_hist (latter always excludes history, unaffected by this switch)."
         ),
     )
     parser.add_argument(
         "--no-three-window-evaluation",
         action="store_true",
         help=(
-            "关闭链末三窗口评估（past/current/future 上旧画像 vs 新画像）；"
-            "减少额外动作 API 调用，输出 jsonl 不含 three_window_evaluation"
+            "Disable three-window evaluation at chain end (past/current/future old persona vs new persona); "
+            "reduces extra action API calls, output jsonl omits three_window_evaluation"
         ),
     )
     args = parser.parse_args()
@@ -829,7 +768,7 @@ def main() -> None:
     )
     if args.input_jsonl is None:
         print(
-            f"[BaselineChain] 窗口化数据集类型={args.windowed_dataset} → glob={file_glob_resolved}",
+            f"[BaselineChain] {args.windowed_dataset} → glob={file_glob_resolved}",
             flush=True,
         )
 
@@ -839,7 +778,6 @@ def main() -> None:
         output_stem = _output_stem_with_dataset(base_stem, str(args.windowed_dataset))
         if raw_path.stem and output_stem != raw_path.stem:
             print(
-                f"[BaselineChain] 输出文件名含数据集类型区分: "
                 f"{raw_path.stem}.jsonl → {output_stem}.jsonl",
                 flush=True,
             )

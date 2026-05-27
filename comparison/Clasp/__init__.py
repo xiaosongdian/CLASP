@@ -1,5 +1,5 @@
 """
-Clasp 侧：DPO 微调后画像服务调用封装（与主项目 config 中 PROFILE_API 一致，可独立覆盖 base/model）。
+Clasp: DPO ( config PROFILE_API, base/model). 
 """
 from .profile_client import (
     FinetunedProfileClient,

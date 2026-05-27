@@ -1,44 +1,55 @@
 #!/usr/bin/env python3
 """
-Clasp DPO 画像有效性 · 切片评估（非全量窗口链）
+Clasp DPO Persona Validity · Slice Evaluation (non-full window chain)
 
-默认评估「P0 用 W0 建画像 → 预测 W1 → 按误差精炼得 P1 → 预测 W2」两跳。加 ``--slice-eval-mode w0_w1_w2_p0p1`` 时：P0 分别评 **W0/W1/W2**，再用 **W1** 上预测误差精炼得 P1，P1 再评三窗；**W0 从不**向动作模型注入近期行为（history 与观测块均为空）；**W1/W2**：未加 ``--no-action-prompt-observed-history`` 时与旧 ``w1_w2`` 切片一致（上一窗 history + 观测块），加上该参数则 W1/W2 也不注入。行内另写 ``P0_W0_F``…``P1_W2_Q``，并填 ``W1_*``/``W2_*`` 为 **P0 / P1 各自三窗**的算术均值（便于全链路粗看）；**柱状图** ``plot_dpo_profile_slice_radar`` 对 p0p1 成功行改为聚合 **``P0_W1_*``（P0@W1）** 与 **``P1_W2_*``（P1@W2）** 单窗得分。加 ``--slice-eval-mode w2_w3`` 时需四个连续窗口：
-仍用 W1 误差精炼得 P1，再评 **物理 W2** 并写入 **W1_***（与柱状图「基线柱」语义对齐），再用 W2 误差精炼得 P2 后评 **物理 W3** 写入 **W2_***；输出文件名为 ``…_w2w3.jsonl``，勿与 ``w1_w2`` 混在同一 jsonl 里 ``--resume``。
+Default evaluation: "P0 builds persona using W0 → predict W1 → refine by error to get P1 → predict W2" two hops.
+With ``--slice-eval-mode w0_w1_w2_p0p1``: P0 evaluates **W0/W1/W2** separately, then refines using **W1** prediction error to get P1, P1 evaluates three windows;
+**W0 never** injects recent behaviors to action model (history and observed block both empty); **W1/W2**: without ``--no-action-prompt-observed-history`` consistent with old ``w1_w2`` slice (previous window history + observed block),
+with that parameter W1/W2 also don't inject. Write ``P0_W0_F``…``P1_W2_Q`` inline, fill ``W1_*``/``W2_*`` as arithmetic mean of **P0 / P1 three-window** scores (for rough full-path view);
+**bar chart** ``plot_dpo_profile_slice_radar`` for p0p1 success rows aggregates **``P0_W1_*`` (P0@W1)** and **``P1_W2_*`` (P1@W2)** single-window scores.
+With ``--slice-eval-mode w2_w3`` need four consecutive windows: still refine P1 using W1 error, evaluate **physical W2** write to **W1_*** (semantically aligned with bar chart "baseline bar"),
+then refine P2 using W2 error, evaluate **physical W3** write to **W2_***; output filename ``…_w2w3.jsonl``, don't mix with ``w1_w2`` in same jsonl with ``--resume``.
 
-动作侧统一使用 **Clasp 动作 checkpoint**（与 window_chain 中 clasp_online 一致），
-只切换 **画像精炼（P0→P1）** 后端，便于对比 DPO 画像 vs 基座 vLLM vs gpt-4o-mini。
+Action side uniformly uses **Clasp action checkpoint** (consistent with clasp_online in window_chain),
+only switches **persona refinement (P0→P1)** backend, facilitating comparison of DPO persona vs base vLLM vs gpt-4o-mini.
 
-**默认（``--initial-p0 shared_gpt``）**：三种 variant **共用同一份**由 **GPT-4o-mini**（``cfg.PROFILE_MODEL`` + 商用 API）对 W0 **只调用一次**生成的初始画像 P0；
-随后各 variant 仍用各自的精炼得到 P1；在 ``w1_w2`` 下 **W2_F/L/Q** 反映「同一起点下的不同精炼 + 对 W2 的预测」。若需旧行为（各 variant 自己从 W0 生成 P0），加 ``--initial-p0 per_variant``。
+**Default (``--initial-p0 shared_gpt``)**: three variants **share same** initial persona generated **once** by **GPT-4o-mini** (``cfg.PROFILE_MODEL`` + commercial API) on W0;
+subsequently each variant still refines to get P1; under ``w1_w2`` **W2_F/L/Q** reflects "different refinement from same starting point + prediction on W2".
+For old behavior (each variant generates P0 from W0 itself), add ``--initial-p0 per_variant``.
 
-共享 P0 默认写入 ``<output-dir>/shared_gpt_p0/shared_gpt_p0_store.json``：按 ``user_id`` + ``community_id`` 存多条记录（含 ``p0_text``、``window_keys_used`` 等），避免每用户一对文件导致数量爆炸。仍兼容读取旧版 ``p0__uid_*__cid_*.txt``。可用 ``--p0-cache-dir`` 指定目录；``--p0-cache-read`` 优先读缓存跳过 GPT；``--p0-no-disk-cache`` 不写盘（仍可配合显式 ``--p0-cache-dir`` 只读）。
+Shared P0 default writes to ``<output-dir>/shared_gpt_p0/shared_gpt_p0_store.json``: multiple records per ``user_id`` + ``community_id`` (containing ``p0_text``, ``window_keys_used`` etc),
+avoiding explosion of per-user file pairs. Still compatible reading old ``p0__uid_*__cid_*.txt``. Can specify directory with ``--p0-cache-dir``;
+``--p0-cache-read`` prioritizes reading cache skipping GPT; ``--p0-no-disk-cache`` doesn't write disk (still compatible with explicit ``--p0-cache-dir`` read-only).
 
-每种画像变体输出一行 JSON（同一 user 三行，便于按 community 聚合）：
+Each persona variant outputs one JSON line (three lines per user, convenient for per-community aggregation):
   - profile_variant: clasp_dpo | baseline | gpt4o_mini
-  - W1_* / W2_*：``w1_w2`` 时为物理 W1、W2 窗得分；``w2_w3`` 时为物理 **W2**、**W3**（字段名不变，兼容现有聚合/绘图）；``w0_w1_w2_p0p1`` 时为 **P0 三窗**、**P1 三窗**的 F/L/Q 算术均值（细粒度见 ``P0_W*_*`` / ``P1_W*_*``）；柱状图脚本对 p0p1 另行读 **P0@W1 / P1@W2** 单窗。
+  - W1_* / W2_*: under ``w1_w2`` physical W1, W2 window scores; under ``w2_w3`` physical **W2**, **W3** (field names unchanged, compatible with existing aggregation/plotting);
+    under ``w0_w1_w2_p0p1`` arithmetic mean of **P0 three-window** and **P1 three-window** F/L/Q (fine-grained see ``P0_W*_*`` / ``P1_W*_*``);
+    bar chart script for p0p1 separately reads **P0@W1 / P1@W2** single-window.
   - slice_eval_mode: w1_w2 | w2_w3 | w0_w1_w2_p0p1
-  - slice_initial_p0 / slice_p0_backend：初始画像来源说明
-  - action_prompt_include_observed_history：是否向动作模型附带观测历史（见 ``--no-action-prompt-observed-history``）
+  - slice_initial_p0 / slice_p0_backend: initial persona source description
+  - action_prompt_include_observed_history: whether action model includes observed history (see ``--no-action-prompt-observed-history``)
 
-输入：已窗口化 jsonl（``w1_w2`` / ``w0_w1_w2_p0p1`` 至少 W0..W2；``w2_w3`` 至少 W0..W3），默认扫齐 6 个社区 `community_*.jsonl`。
+Input: windowed jsonl (``w1_w2`` / ``w0_w1_w2_p0p1`` at least W0..W2; ``w2_w3`` at least W0..W3), default scans all 6 communities `community_*.jsonl`.
 
-示例（两画像变体 + 多进程，与 baseline 对比实验类似）：
+Example (two persona variants + multi-process, similar to baseline comparison experiment):
   python3 -m comparison.run_dpo_profile_slice_eval \\
     --split test --windowed-root output/windowed \\
     --output-dir output/comparison/dpo_profile_slice \\
     --variants baseline,gpt4o_mini \\
     --max-users-per-community 100 --user-processes 5 --user-process-stagger 0.5
 
-默认 ``--initial-p0 shared_gpt``：换用 ``--initial-p0 per_variant`` 可恢复「各 variant 自建 P0」。
-若曾用旧逻辑跑满 ``--resume``，更换 ``--initial-p0`` 后建议换 ``--output-dir`` 或删旧 jsonl，以免同文件内混用两种协议。
+Default ``--initial-p0 shared_gpt``: use ``--initial-p0 per_variant`` to restore "each variant builds P0".
+If previously ran full ``--resume`` with old logic, after switching ``--initial-p0`` recommend changing ``--output-dir`` or deleting old jsonl to avoid mixing two protocols in same file.
 
-加 ``--no-action-prompt-observed-history`` 时动作 prompt **不**附带观测到的历史行为块与滑窗历史（与 ``run_baseline_comparison`` 同名开关一致），便于在控制变量下更纯粹对比画像文本对预测的影响。在 ``w0_w1_w2_p0p1`` 下该开关仅作用于 **W1/W2** 预测；**W0 恒不注入**近期动作。
+With ``--no-action-prompt-observed-history`` action prompt **doesn't** include observed behavior block and sliding-window history (consistent with same-name switch in ``run_baseline_comparison``),
+facilitating purer comparison of persona text impact on prediction under controlled variables. Under ``w0_w1_w2_p0p1`` this switch only affects **W1/W2** prediction; **W0 never injects** recent actions.
 
-模型约定（与 comparison 窗口链一致）：
-  - **动作**：全程 ``cfg.COMPARISON_CLASP_ACTION_VLLM_MODEL``（如 Meta-Llama-3-8B-Instruct-bluesky-sft）。
-  - **baseline 变体画像**：``cfg.COMPARISON_BASELINE_VLLM_MODEL``（原始 Instruct 基座，走 PROFILE_API）。
-  - **clasp_dpo 变体画像**：``cfg.COMPARISON_CLASP_PROFILE_VLLM_MODEL``。
-  - **gpt4o_mini 变体画像**：``cfg.OPENAI_BASE_URL`` + ``cfg.PROFILE_MODEL``（与主流程商用画像一致）。
+Model conventions (consistent with comparison window chain):
+  - **Action**: throughout ``cfg.COMPARISON_CLASP_ACTION_VLLM_MODEL`` (e.g. Meta-Llama-3.1-8B-Instruct-bluesky-sft).
+  - **baseline variant persona**: ``cfg.COMPARISON_BASELINE_VLLM_MODEL`` (original Instruct base, goes through PROFILE_API).
+  - **clasp_dpo variant persona**: ``cfg.COMPARISON_CLASP_PROFILE_VLLM_MODEL``.
+  - **gpt4o_mini variant persona**: ``cfg.OPENAI_BASE_URL`` + ``cfg.PROFILE_MODEL`` (consistent with main flow commercial persona).
 """
 from __future__ import annotations
 
@@ -88,9 +99,9 @@ from src.scorer import SemanticScorer
 from comparison.baseline_resume import filter_users_per_community
 
 
-PROFILE_VARIANTS = ("clasp_dpo", "baseline", "gpt4o_mini")
+PROFILE_VARIANTS = ("clasp_dpo", "baseline", "gpt4o_mini", "incremental_persona", "regeneration_persona")
 
-# 切片协议：jsonl 中始终写 W1_* / W2_*，语义随 slice_eval_mode 变化（见 --slice-eval-mode）
+# Slice protocol: always write W1_* / W2_* in jsonl, semantics vary by slice_eval_mode (see --slice-eval-mode)
 SLICE_EVAL_MODE_W1_W2 = "w1_w2"
 SLICE_EVAL_MODE_W2_W3 = "w2_w3"
 SLICE_EVAL_MODE_W0_W1_W2_P0P1 = "w0_w1_w2_p0p1"
@@ -107,8 +118,19 @@ def _action_clasp_scope() -> Any:
 
 
 @contextmanager
+def _action_base_scope() -> Any:
+    """Switch to base action model (for incremental_persona / regeneration_persona)."""
+    old = cfg.ACTION_API_MODEL
+    cfg.ACTION_API_MODEL = cfg.COMPARISON_BASELINE_VLLM_MODEL
+    try:
+        yield
+    finally:
+        cfg.ACTION_API_MODEL = old
+
+
+@contextmanager
 def _profile_vllm_scope(kind: str) -> Any:
-    """kind: clasp_dpo | baseline — 切换 vLLM 画像 model id。"""
+    """kind: clasp_dpo | baseline — switch vLLM persona model id."""
     old = cfg.PROFILE_API_MODEL
     try:
         if kind == "clasp_dpo":
@@ -137,11 +159,11 @@ def _p0p1_triple_window_predict_args(
     inject_recent_w1w2: bool,
 ) -> Tuple[List[Dict], List[Dict], bool, Optional[str]]:
     """
-    w0_w1_w2_p0p1：对单窗构造 predict_actions_for_window 参数。
+    w0_w1_w2_p0p1: construct predict_actions_for_window parameters for single window.
 
-    - **W0（index=0）**：恒不注入近期动作（history 空、无 profile_suffix、include_observed_history=False）。
-    - **W1/W2**：仅当 inject_recent_w1w2 为 True 时与旧 w1_w2 切片一致（上一窗作 history + 观测块）；
-      为 False 时与 W0 相同（纯画像 + 目标窗）。
+    - **W0 (index=0)**: never inject recent actions (history empty, no profile_suffix, include_observed_history=False).
+    - **W1/W2**: only when inject_recent_w1w2 is True consistent with old w1_w2 slice (previous window as history + observed block);
+      when False same as W0 (pure persona + target window).
     """
     if window_index == 0:
         return [], ws[0], False, None
@@ -206,8 +228,8 @@ def _slice_windowed_chain(
     n: int,
 ) -> Tuple[Optional[str], Optional[List[str]], Optional[List[List[Dict]]]]:
     """
-    取前 n 个按编号排序的窗口 W*。成功返回 (None, keys, [w0, w1, ...])；
-    失败返回 (error_code, None, None)。
+    Get first n windows sorted by number W*. Success returns (None, keys, [w0, w1, ...]);
+    failure returns (error_code, None, None).
     """
     windows = user_record.get("windows") or {}
     keys = sorted(
@@ -225,8 +247,8 @@ def _slice_w0_w1_w2(
     user_record: Dict[str, Any],
 ) -> Tuple[Optional[str], Optional[List[Dict]], Optional[List[Dict]], Optional[List[Dict]], Optional[List[str]]]:
     """
-    从窗口化用户记录取出 W0/W1/W2 与排序后的键。
-    失败时返回 (error_code, None, None, None, None)；成功时首项为 None。
+    Extract W0/W1/W2 and sorted keys from windowed user record.
+    Failure returns (error_code, None, None, None, None); success first item is None.
     """
     err, keys, ws = _slice_windowed_chain(user_record, n=3)
     if err or ws is None:
@@ -240,7 +262,7 @@ def _safe_p0_cache_segment(value: Any, *, max_len: int = 220) -> str:
 
 
 def _p0_cache_paths(cache_dir: Path, uid: Any, cid: Any) -> Tuple[Path, Path]:
-    """旧版每用户一对文件路径（仅用于兼容读取）。"""
+    """Old version per-user file pair paths (only for backward compatibility reading)."""
     base = cache_dir / f"p0__uid_{_safe_p0_cache_segment(uid)}__cid_{_safe_p0_cache_segment(cid, max_len=80)}"
     return base.with_suffix(".txt"), base.with_suffix(".meta.json")
 
@@ -315,14 +337,14 @@ def _write_p0_store_atomic(store_path: Path, data: Dict[str, Any]) -> None:
 
 
 def _try_load_p0_cache(txt_path: Path) -> Optional[str]:
-    """旧版单用户 .txt 缓存。"""
+    """Old version single-user .txt cache."""
     if not txt_path.is_file():
         return None
     return txt_path.read_text(encoding="utf-8")
 
 
 def _try_load_p0_from_json_store(cache_dir: Path, uid: Any, cid: Any) -> Optional[str]:
-    """优先读聚合 json；若无则读旧版 per-user .txt。"""
+    """Prioritize reading aggregated json; if not, read old per-user .txt."""
     store_p = _p0_store_json_path(cache_dir)
     lock_p = _p0_store_lock_path(cache_dir)
     key = _p0_store_entry_key(uid, cid)
@@ -361,7 +383,7 @@ def _save_p0_to_json_store(
         "window_keys_used": window_keys_used[:3],
         "p0_text": p0_text or "",
         "encoding": "utf-8",
-        "note": "GPT-4o-mini (cfg.PROFILE_MODEL) 初始画像；聚合于 shared_gpt_p0_store.json",
+        "note": "GPT-4o-mini (cfg.PROFILE_MODEL) initial persona; aggregated in shared_gpt_p0_store.json",
     }
     lock_p.parent.mkdir(parents=True, exist_ok=True)
     with lock_p.open("a+", encoding="utf-8") as lf:
@@ -384,8 +406,8 @@ def _obtain_shared_gpt_p0(
     p0_cache_write: bool,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
-    获取共享 GPT 初始画像：可选先读盘，否则调 API 并写入缓存。
-    返回 (p0 正文, error 字符串)；成功时 error 为 None。
+    Obtain shared GPT initial persona: optionally read disk first, otherwise call API and write to cache.
+    Returns (p0 text, error string); success when error is None.
     """
     uid, cid = user.get("user_id"), user.get("community_id")
     if p0_cache_read and p0_cache_dir is not None:
@@ -414,7 +436,7 @@ def _refine_one_base_candidate(
     *,
     profile_kind: str,
 ) -> str:
-    """单次精炼、仅 vLLM base 槽位（不调商用 API）。"""
+    """Single refinement, vLLM base slot only (don't call commercial API)."""
     old_ratio = float(cfg.COMMERCIAL_PROFILE_RATIO)
     old_enable = bool(cfg.ENABLE_COMMERCIAL_PROFILE)
     try:
@@ -437,6 +459,15 @@ def _refine_one_base_candidate(
     return p0
 
 
+def _incremental_refine_block(hist_actions: List[Dict], window_key: str) -> str:
+    """Incremental persona: no prediction error, only driven by current window actual behaviors."""
+    return (
+        "(Incremental persona update: no predicted-vs-actual errors.)\n"
+        f"Align the persona with these **actual behaviors in {window_key}**:\n\n"
+        + format_behavior_data(hist_actions)
+    )
+
+
 def evaluate_user_slice_one_variant(
     user_record: Dict[str, Any],
     profile_variant: str,
@@ -445,6 +476,8 @@ def evaluate_user_slice_one_variant(
     p0_shared: Optional[str] = None,
     action_prompt_include_observed_history: bool = True,
     slice_eval_mode: str = SLICE_EVAL_MODE_W1_W2,
+    save_profile_text: bool = False,
+    force_clasp_action: bool = False,
 ) -> Dict[str, Any]:
     uid = user_record.get("user_id")
     cid = user_record.get("community_id")
@@ -470,14 +503,17 @@ def evaluate_user_slice_one_variant(
         "community_id": cid,
         "profile_variant": profile_variant,
         "window_keys_used": keys[:need_n],
-        "slice_action_model": str(cfg.COMPARISON_CLASP_ACTION_VLLM_MODEL),
         "slice_initial_p0_arg": "shared_gpt" if p0_shared is not None else "per_variant",
         "action_prompt_include_observed_history": bool(action_prompt_include_observed_history),
         "slice_eval_mode": slice_eval_mode,
     }
 
     try:
-        with _action_clasp_scope():
+        # Unified use of Clasp action model (all variants share)
+        action_scope = _action_clasp_scope()
+        out["slice_action_model"] = str(cfg.COMPARISON_CLASP_ACTION_VLLM_MODEL)
+
+        with action_scope:
             ih = bool(action_prompt_include_observed_history)
             if p0_shared is not None:
                 p0 = p0_shared
@@ -487,11 +523,13 @@ def evaluate_user_slice_one_variant(
                 p0 = _commercial_initial_profile(w0)
                 out["slice_initial_p0"] = "per_variant"
                 out["slice_p0_backend"] = f"openai:{cfg.PROFILE_MODEL}"
-            elif profile_variant in ("clasp_dpo", "baseline"):
-                with _profile_vllm_scope(profile_variant):
+            elif profile_variant in ("clasp_dpo", "baseline", "incremental_persona", "regeneration_persona"):
+                # incremental_persona and regeneration_persona use baseline model
+                kind = "baseline" if profile_variant in ("incremental_persona", "regeneration_persona") else profile_variant
+                with _profile_vllm_scope(kind):
                     p0 = generate_initial_profile(None, None, w0)
                 out["slice_initial_p0"] = "per_variant"
-                if profile_variant == "baseline":
+                if kind == "baseline":
                     out["slice_p0_backend"] = f"vllm:{cfg.COMPARISON_BASELINE_VLLM_MODEL}"
                 else:
                     out["slice_p0_backend"] = f"vllm:{cfg.COMPARISON_CLASP_PROFILE_VLLM_MODEL}"
@@ -524,8 +562,24 @@ def evaluate_user_slice_one_variant(
                 disc1 = build_behavior_discrepancies(preds_p0_by_w[1], w1, w0)
                 if profile_variant == "gpt4o_mini":
                     p1 = _commercial_refine_profile(p0, disc1)
+                    out["slice_profile_backend"] = f"openai:{cfg.PROFILE_MODEL}"
+                elif profile_variant == "incremental_persona":
+                    # Incremental persona: refine using W1 actual behaviors (no error signal)
+                    incr_block = _incremental_refine_block(w1, keys[1])
+                    p1 = _refine_one_base_candidate(p0, incr_block, profile_kind="baseline")
+                    out["slice_profile_backend"] = f"vllm:{cfg.COMPARISON_BASELINE_VLLM_MODEL}"
+                elif profile_variant == "regeneration_persona":
+                    # Regeneration persona: regenerate using all observed behaviors from W0+W1
+                    all_actions = w0 + w1
+                    with _profile_vllm_scope("baseline"):
+                        p1 = generate_initial_profile(None, None, all_actions)
+                    out["slice_profile_backend"] = f"vllm:{cfg.COMPARISON_BASELINE_VLLM_MODEL}"
                 else:
                     p1 = _refine_one_base_candidate(p0, disc1, profile_kind=profile_variant)
+                    if profile_variant == "baseline":
+                        out["slice_profile_backend"] = f"vllm:{cfg.COMPARISON_BASELINE_VLLM_MODEL}"
+                    else:
+                        out["slice_profile_backend"] = f"vllm:{cfg.COMPARISON_CLASP_PROFILE_VLLM_MODEL}"
 
                 for wi in range(3):
                     hist, tgt, use_ih, suff = _p0p1_triple_window_predict_args(
@@ -566,6 +620,15 @@ def evaluate_user_slice_one_variant(
                 disc1 = build_behavior_discrepancies(preds_w1, w1, w0)
                 if profile_variant == "gpt4o_mini":
                     p1 = _commercial_refine_profile(p0, disc1)
+                elif profile_variant == "incremental_persona":
+                    # Incremental persona: refine using W1 actual behaviors (no error signal)
+                    incr_block = _incremental_refine_block(w1, keys[1])
+                    p1 = _refine_one_base_candidate(p0, incr_block, profile_kind="baseline")
+                elif profile_variant == "regeneration_persona":
+                    # Regeneration persona: regenerate using all observed behaviors from W0+W1
+                    all_actions = w0 + w1
+                    with _profile_vllm_scope("baseline"):
+                        p1 = generate_initial_profile(None, None, all_actions)
                 else:
                     p1 = _refine_one_base_candidate(p0, disc1, profile_kind=profile_variant)
 
@@ -606,6 +669,15 @@ def evaluate_user_slice_one_variant(
                     disc2 = build_behavior_discrepancies(preds_on_w2, w2, w1)
                     if profile_variant == "gpt4o_mini":
                         p2 = _commercial_refine_profile(p1, disc2)
+                    elif profile_variant == "incremental_persona":
+                        # Incremental persona: refine using W2 actual behaviors (no error signal)
+                        incr_block = _incremental_refine_block(w2, keys[2])
+                        p2 = _refine_one_base_candidate(p1, incr_block, profile_kind="baseline")
+                    elif profile_variant == "regeneration_persona":
+                        # Regeneration persona: regenerate using all observed behaviors from W0+W1+W2
+                        all_actions = w0 + w1 + w2
+                        with _profile_vllm_scope("baseline"):
+                            p2 = generate_initial_profile(None, None, all_actions)
                     else:
                         p2 = _refine_one_base_candidate(p1, disc2, profile_kind=profile_variant)
 
@@ -635,13 +707,18 @@ def evaluate_user_slice_one_variant(
                 out["slice_profile_backend"] = f"vllm:{cfg.COMPARISON_CLASP_PROFILE_VLLM_MODEL}"
             else:
                 out["slice_profile_backend"] = f"openai:{cfg.PROFILE_MODEL}"
+
+            # Save persona text (optional, for analysis)
+            if save_profile_text:
+                out["profile_p0_text"] = p0 if 'p0' in locals() else None
+                out["profile_p1_text"] = p1 if 'p1' in locals() else None
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
     return out
 
 
 def _load_completed_variant_keys(path: Path) -> Set[Tuple[str, str, str]]:
-    """(user_id, community_id str, profile_variant) 已成功写入。"""
+    """(user_id, community_id str, profile_variant) successfully written."""
     done: Set[Tuple[str, str, str]] = set()
     if not path.is_file():
         return done
@@ -664,7 +741,7 @@ def _load_completed_variant_keys(path: Path) -> Set[Tuple[str, str, str]]:
 
 
 def _print_community_summary(rows: List[Dict[str, Any]], variants: Tuple[str, ...]) -> None:
-    """按 community_id × profile_variant 打印 W1_Q / W2_Q 均值。"""
+    """Print mean W1_Q / W2_Q by community_id × profile_variant."""
     by_c: Dict[Any, Dict[Tuple[str, str], List[float]]] = defaultdict(lambda: defaultdict(list))
     for r in rows:
         if r.get("error"):
@@ -679,7 +756,7 @@ def _print_community_summary(rows: List[Dict[str, Any]], variants: Tuple[str, ..
             if v is not None:
                 by_c[cid][(pv, step)].append(float(v))
 
-    print("\n[DpoSlice] ========== 按 community_id 汇总 mean(Q) ==========", flush=True)
+    print("\n[DpoSlice] ========== Summary mean(Q) by community_id ==========", flush=True)
     for cid in sorted(by_c.keys(), key=lambda x: str(x)):
         parts = [f"community={cid}"]
         for v in variants:
@@ -706,13 +783,13 @@ def _user_needs_any_variant(
 
 def _dpo_slice_user_worker(job: tuple) -> tuple:
     """
-    子进程：单用户、多 variant 串行（每进程独立 SemanticScorer，避免 embedder 多线程争用）。
+    Subprocess: single user, multiple variants serial (each process independent SemanticScorer to avoid embedder multi-thread contention).
 
     job: (idx, user, variants, scorer_device, stagger_sec, completed_frozen, resume,
           initial_p0, p0_cache_dir, p0_cache_read, p0_cache_write, action_prompt_include_observed_history,
-          slice_eval_mode)
+          slice_eval_mode, save_profile_text, force_clasp_action)
     initial_p0: "shared_gpt" | "per_variant"
-    返回 (_, rows, elapsed_sec)（idx 供调试，父进程可忽略）
+    Returns (_, rows, elapsed_sec) (idx for debugging, parent can ignore)
     """
     (
         idx,
@@ -728,6 +805,8 @@ def _dpo_slice_user_worker(job: tuple) -> tuple:
         p0_cache_write,
         action_prompt_include_observed_history,
         slice_eval_mode,
+        save_profile_text,
+        force_clasp_action,
     ) = job
     if stagger_sec > 0:
         time.sleep(float(idx) * float(stagger_sec))
@@ -798,92 +877,100 @@ def _dpo_slice_user_worker(job: tuple) -> tuple:
                 p0_shared=p0_once,
                 action_prompt_include_observed_history=action_prompt_include_observed_history,
                 slice_eval_mode=slice_eval_mode,
+                save_profile_text=save_profile_text,
+                force_clasp_action=force_clasp_action,
             )
         )
     return idx, rows, time.time() - t0
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="DPO 画像切片：P0→W1→精炼→P1→W2，三画像源对比")
-    ap.add_argument("--split", default="test", help="windowed 子目录名，如 test")
+    ap = argparse.ArgumentParser(description="DPO Persona Slice: P0→W1→refine→P1→W2, three persona source comparison")
+    ap.add_argument("--split", default="test", help="windowed subdirectory name, e.g. test")
     ap.add_argument(
         "--windowed-root",
         type=Path,
         default=ROOT / "output" / "windowed",
-        help="窗口化数据根目录",
+        help="Windowed data root directory",
     )
     ap.add_argument(
         "--output-dir",
         type=Path,
         default=ROOT / "output" / "comparison" / "dpo_profile_slice",
-        help="输出目录（写入单个 jsonl）",
+        help="Output directory (write single jsonl)",
     )
     ap.add_argument(
         "--file-glob",
         default="community_*.jsonl",
-        help="在 <windowed-root>/<split>/ 下匹配的 glob",
+        help="Glob pattern to match under <windowed-root>/<split>/",
     )
     ap.add_argument(
         "--variants",
         default=",".join(PROFILE_VARIANTS),
-        help="逗号分隔：clasp_dpo,baseline,gpt4o_mini 的子集",
+        help="Comma-separated: subset of clasp_dpo,baseline,gpt4o_mini",
     )
-    ap.add_argument("--max-users", type=int, default=None, help="全局最多用户数（跨文件合计）")
+    ap.add_argument("--max-users", type=int, default=None, help="Global max users (cross-file total)")
     ap.add_argument(
         "--max-users-per-community",
         type=int,
         default=0,
-        help="每社区最多用户数；0=不限制（默认扫满各文件）",
+        help="Max users per community; 0=no limit (default scan full each file)",
     )
     ap.add_argument("--scorer-device", default="cpu")
-    ap.add_argument("--resume", action="store_true", help="跳过已成功写入的 (user, community, variant)")
+    ap.add_argument("--resume", action="store_true", help="Skip already successfully written (user, community, variant)")
+    ap.add_argument(
+        "--append",
+        action="store_true",
+        help="Append mode: don't clear existing data, suitable for multi-batch runs with different variants then merge",
+    )
     ap.add_argument(
         "--user-processes",
         type=int,
         default=1,
         help=(
-            "并行处理用户数；>1 时启多进程（每进程独立 SemanticScorer，"
-            "与 run_baseline_comparison 的 --user-processes 类似）。默认 1=串行。"
+            "Parallel user processing; >1 enables multi-process (each process independent SemanticScorer, "
+            "similar to run_baseline_comparison --user-processes). Default 1=serial."
         ),
     )
     ap.add_argument(
         "--user-process-stagger",
         type=float,
         default=0.5,
-        help="多进程时按子进程序号错开启动的秒数，减轻画像/动作 API 洪峰",
+        help="Multi-process startup stagger seconds by subprocess index, reduce persona/action API burst",
     )
     ap.add_argument(
         "--initial-p0",
         choices=("shared_gpt", "per_variant"),
         default="shared_gpt",
         help=(
-            "shared_gpt（默认）：每用户只调一次商用 GPT 初始画像，全 variant 共用后再各自精炼并评 W2；"
-            "per_variant：各 variant 自己从 W0 生成 P0（旧行为）"
+            "shared_gpt (default): call commercial GPT initial persona once per user, all variants share then each refines and evaluates W2; "
+            "per_variant: each variant generates P0 from W0 (old behavior)"
         ),
     )
     ap.add_argument(
         "--p0-cache-dir",
         type=Path,
         default=None,
-        help="共享 GPT P0 落盘目录；默认 <output-dir>/shared_gpt_p0，写入 shared_gpt_p0_store.json（仅 initial-p0=shared_gpt 且未 --p0-no-disk-cache）",
+        help="Shared GPT P0 disk directory; default <output-dir>/shared_gpt_p0, write shared_gpt_p0_store.json (only initial-p0=shared_gpt and not --p0-no-disk-cache)",
     )
     ap.add_argument(
         "--p0-cache-read",
         action="store_true",
-        help="若 shared_gpt_p0_store.json（或旧版 per-user .txt）中已有该用户 P0 则跳过 GPT、直接读取（须 shared_gpt 且配置了可解析的缓存路径）",
+        help="If shared_gpt_p0_store.json (or old per-user .txt) already has user P0 skip GPT, read directly (requires shared_gpt and configured parseable cache path)",
     )
     ap.add_argument(
         "--p0-no-disk-cache",
         action="store_true",
-        help="不把新生成的 P0 写入磁盘；仍可用 --p0-cache-dir + --p0-cache-read 读取已有缓存",
+        help="Don't write newly generated P0 to disk; still can use --p0-cache-dir + --p0-cache-read to read existing cache",
     )
     ap.add_argument(
         "--no-action-prompt-observed-history",
         action="store_true",
         help=(
-            "动作 prompt 不附带观测历史：不拼画像后的本窗行为块，且 Recent user actions 为空占位 "
-            "（与 run_baseline_comparison 的同名开关一致）；便于控制变量、更纯粹对比画像对预测的影响。"
-            "在 w0_w1_w2_p0p1 下仅关闭 **W1/W2** 上的注入；**W0 在该模式下本就不注入**。"
+            "Action prompt doesn't include observed history: don't concatenate current window behavior block after persona, "
+            "and Recent user actions is empty placeholder "
+            "(consistent with same-name switch in run_baseline_comparison); facilitates controlled variable comparison, purer comparison of persona impact on prediction. "
+            "Under w0_w1_w2_p0p1 only disables injection on **W1/W2**; **W0 in this mode never injects anyway**."
         ),
     )
     ap.add_argument(
@@ -895,30 +982,40 @@ def main() -> None:
         ),
         default=SLICE_EVAL_MODE_W1_W2,
         help=(
-            "w1_w2（默认）：P0→评 W1→精炼 P1→评 W2，写入 W1_* / W2_*。"
-            "w2_w3：需 W0..W3 四窗；仍用 W1 误差精炼 P1，物理 W2 得分写入 W1_*（柱状图基线柱语义），"
-            "再用 W2 误差精炼 P2→物理 W3 写入 W2_*；输出 …_w2w3.jsonl，勿与 w1_w2 混用 --resume。"
-            "w0_w1_w2_p0p1：P0 评 W0/W1/W2，按 W1 误差精炼 P1 后再评三窗；另写 P0_W*_*/P1_W*_；"
-            "W1_* / W2_* 写入 P0/P1 各自三窗均值（粗看全链路）；柱状图 ``plot_dpo_profile_slice_radar`` 对 p0p1 聚合 **P0_W1_*、P1_W2_***（单物理窗）。W0 从不注入动作历史；"
-            "W1/W2 是否注入由 --no-action-prompt-observed-history 控制（默认注入）。"
-            "输出 …_w0w1w2_p0p1.jsonl。"
+            "w1_w2 (default): P0→evaluate W1→refine P1→evaluate W2, write W1_* / W2_*. "
+            "w2_w3: need W0..W3 four windows; still refine P1 using W1 error, physical W2 score write to W1_* (bar chart baseline bar semantic), "
+            "then refine P2 using W2 error→physical W3 write to W2_*; output …_w2w3.jsonl, don't mix with w1_w2 in --resume. "
+            "w0_w1_w2_p0p1: P0 evaluate W0/W1/W2, refine P1 by W1 error then evaluate three windows; also write P0_W*_*/P1_W*_*; "
+            "W1_* / W2_* write P0/P1 three-window means (rough full-path view); bar chart ``plot_dpo_profile_slice_radar`` for p0p1 aggregates **P0_W1_*, P1_W2_*** (single physical window). W0 never injects action history; "
+            "W1/W2 injection controlled by --no-action-prompt-observed-history (default inject). "
+            "Output …_w0w1w2_p0p1.jsonl."
         ),
+    )
+    ap.add_argument(
+        "--save-profile-text",
+        action="store_true",
+        help="Save persona text in output JSONL (p0_text, p1_text) for subsequent analysis",
+    )
+    ap.add_argument(
+        "--force-clasp-action",
+        action="store_true",
+        help="Force all variants (including incremental_persona and regeneration_persona) use Clasp action model",
     )
     args = ap.parse_args()
 
     variants = tuple(v.strip() for v in args.variants.split(",") if v.strip())
     bad = [v for v in variants if v not in PROFILE_VARIANTS]
     if bad:
-        print(f"[DpoSlice] 未知 variant: {bad}，可选: {PROFILE_VARIANTS}", flush=True)
+        print(f"[DpoSlice] Unknown variants: {bad}, available: {PROFILE_VARIANTS}", flush=True)
         sys.exit(1)
 
     split_dir = (Path(args.windowed_root) / args.split).resolve()
     if not split_dir.is_dir():
-        print(f"[DpoSlice] 无目录: {split_dir}", flush=True)
+        print(f"[DpoSlice] No directory: {split_dir}", flush=True)
         sys.exit(1)
     files = sorted(split_dir.glob(args.file_glob))
     if not files:
-        print(f"[DpoSlice] 无匹配文件: {split_dir}/{args.file_glob}", flush=True)
+        print(f"[DpoSlice] No matching files: {split_dir}/{args.file_glob}", flush=True)
         sys.exit(1)
 
     out_dir = Path(args.output_dir).resolve()
@@ -966,75 +1063,87 @@ def main() -> None:
         users_in = all_rows
 
     print(
-        f"[DpoSlice] 输入文件数={len(files)} 读取行={len(all_rows)} "
-        f"评测用户={len(users_in)} variants={variants} slice-eval-mode={args.slice_eval_mode} -> {out_path}",
+        f"[DpoSlice] Input files={len(files)} read_lines={len(all_rows)} "
+        f"eval_users={len(users_in)} variants={variants} slice-eval-mode={args.slice_eval_mode} -> {out_path}",
         flush=True,
     )
-    print(
-        f"[DpoSlice] 动作 API 固定为 COMPARISON_CLASP_ACTION_VLLM_MODEL="
-        f"{cfg.COMPARISON_CLASP_ACTION_VLLM_MODEL}",
-        flush=True,
-    )
+    # Distinguish action models used by different variants
+    base_action_variants = [v for v in variants if v in ("incremental_persona", "regeneration_persona")]
+    clasp_action_variants = [v for v in variants if v not in ("incremental_persona", "regeneration_persona")]
+    if clasp_action_variants:
+        print(
+            f"[DpoSlice] Action API ({', '.join(clasp_action_variants)}): "
+            f"COMPARISON_CLASP_ACTION_VLLM_MODEL={cfg.COMPARISON_CLASP_ACTION_VLLM_MODEL}",
+            flush=True,
+        )
+    if base_action_variants:
+        print(
+            f"[DpoSlice] Action API ({', '.join(base_action_variants)}): "
+            f"COMPARISON_BASELINE_VLLM_MODEL={cfg.COMPARISON_BASELINE_VLLM_MODEL}",
+            flush=True,
+        )
     if "baseline" in variants or "clasp_dpo" in variants:
         print(
-            f"[DpoSlice] vLLM 画像：baseline 用 COMPARISON_BASELINE_VLLM_MODEL="
-            f"{cfg.COMPARISON_BASELINE_VLLM_MODEL}；clasp_dpo 用 "
+            f"[DpoSlice] vLLM persona: baseline uses COMPARISON_BASELINE_VLLM_MODEL="
+            f"{cfg.COMPARISON_BASELINE_VLLM_MODEL}; clasp_dpo uses "
             f"{cfg.COMPARISON_CLASP_PROFILE_VLLM_MODEL}",
             flush=True,
         )
     if "gpt4o_mini" in variants:
         print(
-            f"[DpoSlice] gpt4o_mini 画像：OpenAI 兼容 API model={cfg.PROFILE_MODEL} base={cfg.OPENAI_BASE_URL}",
+            f"[DpoSlice] gpt4o_mini persona: OpenAI-compatible API model={cfg.PROFILE_MODEL} base={cfg.OPENAI_BASE_URL}",
             flush=True,
         )
     print(
-        f"[DpoSlice] 初始画像 P0 模式: {args.initial_p0} "
-        f"（shared_gpt=全 variant 共用一次 GPT 初始画像；per_variant=各 variant 自建 P0）",
+        f"[DpoSlice] Initial persona P0 mode: {args.initial_p0} "
+        f"(shared_gpt=all variants share one GPT initial persona; per_variant=each variant builds P0)",
         flush=True,
     )
     if args.initial_p0 == "shared_gpt":
         if p0_cache_dir_resolved is not None:
             print(
-                f"[DpoSlice] 共享 P0 缓存目录: {p0_cache_dir_resolved}  "
+                f"[DpoSlice] Shared P0 cache directory: {p0_cache_dir_resolved}  "
                 f"store={_p0_store_json_path(p0_cache_dir_resolved).name}  "
                 f"write_disk={p0_cache_write}  --p0-cache-read={bool(args.p0_cache_read)}",
                 flush=True,
             )
         else:
             print(
-                "[DpoSlice] 共享 P0 不写盘（已加 --p0-no-disk-cache 且未指定 --p0-cache-dir）；"
-                "仅 API 生成、无法从默认路径读缓存",
+                "[DpoSlice] Shared P0 not written to disk (added --p0-no-disk-cache and no --p0-cache-dir); "
+                "only API generated, can't read cache from default path",
                 flush=True,
             )
 
     if args.no_action_prompt_observed_history:
         print(
-            "[DpoSlice] --no-action-prompt-observed-history：动作 prompt 不附带观测历史（与 run_baseline_comparison 一致）",
+            "[DpoSlice] --no-action-prompt-observed-history: action prompt doesn't include observed history (consistent with run_baseline_comparison)",
             flush=True,
         )
     if args.slice_eval_mode == SLICE_EVAL_MODE_W2_W3:
         print(
-            "[DpoSlice] slice-eval-mode=w2_w3：每行 W1_*=物理 W2、W2_*=物理 W3；输入需至少四窗；"
-            f"输出 {out_name}",
+            "[DpoSlice] slice-eval-mode=w2_w3: each row W1_*=physical W2, W2_*=physical W3; input needs at least four windows; "
+            f"output {out_name}",
             flush=True,
         )
     elif args.slice_eval_mode == SLICE_EVAL_MODE_W0_W1_W2_P0P1:
         print(
-            "[DpoSlice] slice-eval-mode=w0_w1_w2_p0p1：P0/P1 各评 W0–W2；"
-            "W0 恒不注入动作历史；W1/W2 注入="
-            f"{not bool(args.no_action_prompt_observed_history)}；"
-            f"输出 {out_name}",
+            "[DpoSlice] slice-eval-mode=w0_w1_w2_p0p1: P0/P1 each evaluate W0–W2; "
+            "W0 never injects action history; W1/W2 inject="
+            f"{not bool(args.no_action_prompt_observed_history)}; "
+            f"output {out_name}",
             flush=True,
         )
 
-    if not args.resume and out_path.is_file():
-        # 覆盖式重来：清空内容、保留路径（不 unlink）；写入阶段仍用 open("a")。
+    if not args.resume and not args.append and out_path.is_file():
+        # Overwrite mode: clear content, keep path (don't unlink); write phase still uses open("a").
         out_path.open("w", encoding="utf-8").close()
-        print(f"[DpoSlice] 非 --resume：已覆盖清空主输出 {out_path}", flush=True)
+        print(f"[DpoSlice] Not --resume/--append: cleared main output {out_path}", flush=True)
+    elif args.resume and out_path.is_file():
+        print(f"[DpoSlice] --resume: append mode, keep existing data", flush=True)
 
     completed = _load_completed_variant_keys(out_path) if args.resume else set()
     if args.resume and completed:
-        print(f"[DpoSlice] --resume：已从输出加载成功键 {len(completed)} 条", flush=True)
+        print(f"[DpoSlice] --resume: loaded {len(completed)} success keys from output", flush=True)
 
     users_work = [
         u
@@ -1042,13 +1151,13 @@ def main() -> None:
         if _user_needs_any_variant(u, variants, completed, args.resume)
     ]
     n_work = len(users_work)
-    print(f"[DpoSlice] 待评估用户: {n_work} / {len(users_in)}", flush=True)
+    print(f"[DpoSlice] Users pending evaluation: {n_work} / {len(users_in)}", flush=True)
 
     written = 0
     procs = max(1, int(args.user_processes))
 
     if n_work == 0:
-        print("[DpoSlice] 无待办用户。", flush=True)
+        print("[DpoSlice] No pending users.", flush=True)
     elif procs <= 1:
         scorer = SemanticScorer(device=args.scorer_device)
         with out_path.open("a", encoding="utf-8") as fout:
@@ -1120,6 +1229,8 @@ def main() -> None:
                             args.no_action_prompt_observed_history
                         ),
                         slice_eval_mode=args.slice_eval_mode,
+                        save_profile_text=args.save_profile_text,
+                        force_clasp_action=args.force_clasp_action,
                     )
                     fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     fout.flush()
@@ -1145,11 +1256,13 @@ def main() -> None:
                 p0_cache_write,
                 action_ih,
                 args.slice_eval_mode,
+                args.save_profile_text,
+                args.force_clasp_action,
             )
             for i, u in enumerate(users_work)
         ]
         print(
-            f"[DpoSlice] 多进程：{eff} workers，错开 {args.user_process_stagger}s/进程",
+            f"[DpoSlice] Multi-process: {eff} workers, stagger {args.user_process_stagger}s/process",
             flush=True,
         )
         run_start = time.time()
@@ -1179,14 +1292,14 @@ def main() -> None:
                 uid_show = rows[0].get("user_id", "?") if rows else "?"
                 print(
                     f"[DpoSlice] [{done_n}/{n_work}] user={uid_show} "
-                    f"本用户={user_elapsed:.1f}s 平均={avg:.1f}s/人 "
+                    f"this_user={user_elapsed:.1f}s avg={avg:.1f}s/user "
                     f"ETA≈{int(eta // 60)}m{int(eta % 60)}s",
                     flush=True,
                 )
 
-    print(f"[DpoSlice] 本 run 新写入行数: {written}", flush=True)
+    print(f"[DpoSlice] New rows written this run: {written}", flush=True)
 
-    # 重读输出文件做汇总（含历史行）
+    # Re-read output file for summary (includes history rows)
     final_rows: List[Dict[str, Any]] = []
     if out_path.is_file():
         with out_path.open("r", encoding="utf-8") as f:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-动作预测器：基于 action_generation_model，
-给定画像 + 历史动作，预测目标窗口内每条动作的类型和内容。
+Action predictor: based on action_generation_model,
+given persona + historical actions, predict action type and content for each action in target window.
 """
 
 import re
@@ -18,12 +18,54 @@ from src.config import (
     TEST_API_MODEL,
 )
 
+# For computing semantic similarity
+_SEMANTIC_SCORER = None
+_SEMANTIC_SCORER_LOCK = threading.Lock()
+
+
+def _get_semantic_scorer():
+    """Lazy load semantic similarity calculator (thread-safe)"""
+    global _SEMANTIC_SCORER
+    if _SEMANTIC_SCORER is None:
+        with _SEMANTIC_SCORER_LOCK:
+            if _SEMANTIC_SCORER is None:  # Double-check
+                try:
+                    from src.scorer import SemanticScorer
+                    _SEMANTIC_SCORER = SemanticScorer(device="cpu")
+                except Exception as e:
+                    print(f"[Warning] Failed to load SemanticScorer: {e}")
+                    _SEMANTIC_SCORER = False  # Mark as failed to avoid retry
+    return _SEMANTIC_SCORER if _SEMANTIC_SCORER is not False else None
+
+
+def compute_semantic_similarity(text1: str, text2: str) -> float:
+    """
+    Compute semantic similarity between two text segments (cosine similarity, range [-1, 1])
+
+    Returns:
+        Similarity score, returns float('nan') if computation fails
+    """
+    if not text1 or not text2:
+        return float('nan')
+
+    scorer = _get_semantic_scorer()
+    if scorer is None:
+        return float('nan')
+
+    try:
+        similarity = scorer.cosine_similarity(text1, text2)
+        return float(similarity)
+    except Exception as e:
+        print(f"[Warning] Semantic similarity computation failed: {e}")
+        return float('nan')
+        return -1.0
+
 _ACTION_API_RR_LOCK = threading.Lock()
 _ACTION_API_RR_IDX = 0
 
 
 def _pick_action_api_base() -> str:
-    """从 effective_action_api_bases() 中轮询选一个端点（线程安全）。"""
+    """Round-robin select one endpoint from effective_action_api_bases() (thread-safe)."""
     global _ACTION_API_RR_IDX
     bases = cfg.effective_action_api_bases()
     if not bases:
@@ -45,15 +87,15 @@ from src.prompts import (
 
 
 # ============================================================================
-# 动作格式化（与 sft_data_generator 保持一致）
+# Action formatting (consistent with sft_data_generator)
 # ============================================================================
 
 def format_action(a: Dict, *, include_timestamp: bool = True) -> str:
     """
-    将单条动作格式化为可读字符串，用于构造 history。
+    Format single action into readable string for constructing history.
 
-    include_timestamp=False 时去掉行首 `[时间]`，用于动作预测 prompt 内的「近期行为」块以节省 token；
-    画像生成等仍可默认 True。
+    When include_timestamp=False, remove `[timestamp]` at line start, used in action prediction prompt's "recent actions" block to save tokens;
+    persona generation etc. can use default True.
     """
     ts = a.get("timestamp", "")
     action_type = a.get("action_type", "")
@@ -83,7 +125,7 @@ def format_history(actions: List[Dict], *, include_timestamp: bool = True) -> st
 
 
 def _truncate_action_history_for_prompt(text: str) -> str:
-    """超长历史头尾截断（与画像共用逻辑；运行时懒导入防与 profile_generator 循环引用）。"""
+    """Truncate long history head and tail (shared logic with persona; lazy import at runtime to prevent circular import with profile_generator)."""
     mc = int(getattr(cfg, "ACTION_PROMPT_HISTORY_MAX_CHARS", 6000) or 0)
     from src.profile_generator import truncate_behavior_plaintext
 
@@ -99,11 +141,11 @@ def _format_action_history_block(history: List[Dict]) -> str:
 
 
 # ============================================================================
-# 构造 prompt（决策 / 内容）
+# Construct prompt (decision / content)
 # ============================================================================
 
 def build_decision_scenario(target_action: Dict) -> str:
-    """根据目标动作的上下文构造决策场景描述。reply 须包含被回复对象原文（target）。"""
+    """Construct decision scenario description based on target action context. reply must include original text of replied object (target)."""
     action_type = target_action.get("action_type", "")
     target = (target_action.get("target") or "").strip()
     action_text = (target_action.get("action_text") or "").strip()
@@ -132,7 +174,7 @@ def build_decision_scenario(target_action: Dict) -> str:
 
 
 def build_content_scenario(target_action: Dict) -> str:
-    """根据目标动作构造内容生成场景描述。reply 必须带被回复对象全文（截断在 TEXT_LONG）。"""
+    """Construct content generation scenario description based on target action. reply must include full text of replied object (truncated at TEXT_LONG)."""
     action_type = target_action.get("action_type", "")
     target = (target_action.get("target") or "").strip()
 
@@ -149,10 +191,38 @@ def build_content_scenario(target_action: Dict) -> str:
     return "What content to generate?"
 
 
+def build_content_scenario_for_discrepancy(target_action: Dict) -> str:
+    """Construct simplified content scenario for discrepancy record (remove redundant information)."""
+    action_type = target_action.get("action_type", "")
+    target = (target_action.get("target") or "").strip()
+
+    if action_type == "post":
+        return "Generate post content"
+    if action_type == "reply":
+        orig = target[:TEXT_LONG] if target else "(original post missing)"
+        return f"Generate reply to: \"{orig}\""
+    return "Generate content"
+
+
+def build_decision_scenario_for_discrepancy(target_action: Dict) -> str:
+    """Construct simplified decision scenario for discrepancy record (remove redundant context repetition)."""
+    action_type = target_action.get("action_type", "")
+
+    if action_type == "post":
+        return "Predict action type for post scenario"
+    if action_type == "reply":
+        return "Predict action type for reply scenario"
+    if action_type == "repost":
+        return "Predict action type for repost scenario"
+    if action_type == "like":
+        return "Predict action type for like scenario"
+    return "Predict action type"
+
+
 def build_decision_prompt(
     user_profile: str, history: List[Dict], target_action: Dict
 ) -> Tuple[str, str]:
-    """返回 (instruction, input_text) 用于决策预测。history 为当前步之前的近期真实动作序列（已格式化进 prompt）。"""
+    """Return (instruction, input_text) for decision prediction. history is recent actual action sequence before current step (already formatted into prompt)."""
     scenario = build_decision_scenario(target_action)
     action_history = _format_action_history_block(history)
     input_text = DECISION_INPUT_TEMPLATE.format(
@@ -167,7 +237,7 @@ def build_decision_prompt(
 def build_content_prompt(
     user_profile: str, history: List[Dict], target_action: Dict
 ) -> Tuple[str, str]:
-    """返回 (instruction, input_text) 用于内容预测。history 为当前步之前的近期真实动作序列（已格式化进 prompt）。"""
+    """Return (instruction, input_text) for content prediction. history is recent actual action sequence before current step (already formatted into prompt)."""
     scenario = build_content_scenario(target_action)
     action_history = _format_action_history_block(history)
     input_text = CONTENT_INPUT_TEMPLATE.format(
@@ -179,7 +249,7 @@ def build_content_prompt(
 
 
 # ============================================================================
-# 模型推理封装
+# Model inference wrapper
 # ============================================================================
 
 def _trunc_for_debug(text: str, max_chars: int) -> str:
@@ -187,11 +257,11 @@ def _trunc_for_debug(text: str, max_chars: int) -> str:
         return ""
     if len(text) <= max_chars:
         return text
-    return text[:max_chars] + f"\n... [截断，共 {len(text)} 字符]"
+    return text[:max_chars] + f"\n... [truncated, total {len(text)} characters]"
 
 
 def _head_tail_for_debug(text: str, head: int, tail: int) -> str:
-    """长文本只打印头+尾，中间省略，便于看结构又不刷屏。"""
+    """For long text, only print head + tail with middle omitted, convenient for viewing structure without flooding output."""
     if not text:
         return ""
     n = len(text)
@@ -200,14 +270,14 @@ def _head_tail_for_debug(text: str, head: int, tail: int) -> str:
     mid = n - head - tail
     return (
         text[:head]
-        + f"\n\n... [已省略中间 {mid} 字符] ...\n\n"
+        + f"\n\n... [omitted middle {mid} characters] ...\n\n"
         + text[-tail:]
     )
 
 
 def _shorten_action_debug_user_text(text: str) -> str:
     """
-    动作预测里 user 往往带超长画像：调试时只保留画像头尾+完整 scenario 段。
+    In action prediction, user text often contains very long persona: in debug mode, only keep persona head/tail + complete scenario section.
     """
     if len(text) <= cfg.DEBUG_LLM_ACTION_USER_MAX:
         return text
@@ -222,7 +292,7 @@ def _shorten_action_debug_user_text(text: str) -> str:
             ph = _head_tail_for_debug(profile, 1000, 600)
             return (
                 f"{marker}\n{ph}\n\n{rest}\n"
-                f"(调试摘要: 原画像 {len(profile)} 字符，已做头尾节选；scenario 及以下完整保留)"
+                f"(debug summary: original persona {len(profile)} characters, head/tail selected; scenario and below kept complete)"
             )
         except ValueError:
             pass
@@ -230,7 +300,7 @@ def _shorten_action_debug_user_text(text: str) -> str:
 
 
 def _format_debug_user_profile_mode(focus: Dict[str, Any]) -> str:
-    """画像类请求：重点展示行为历史或（精炼时）误差块。"""
+    """Persona request: highlight behavior history or (during refinement) discrepancy block."""
     ftype = focus.get("type")
     if ftype == "profile_initial":
         bd = focus.get("behavior_data") or ""
@@ -239,8 +309,8 @@ def _format_debug_user_profile_mode(focus: Dict[str, Any]) -> str:
             bd, cfg.DEBUG_LLM_BEHAVIOR_HEAD, cfg.DEBUG_LLM_BEHAVIOR_TAIL
         )
         return (
-            f"[画像 · 初始 S0] 行为记录数: {rc}\n"
-            f"[重点: 行为历史节选 — 头/尾，总长 {len(bd)} 字符]\n{snippet}"
+            f"[Persona · Initial S0] Behavior record count: {rc}\n"
+            f"[Focus: behavior history excerpt — head/tail, total {len(bd)} characters]\n{snippet}"
         )
     if ftype == "profile_refine":
         disc = (focus.get("discrepancies") or "").strip()
@@ -253,10 +323,10 @@ def _format_debug_user_profile_mode(focus: Dict[str, Any]) -> str:
             op, cfg.DEBUG_LLM_OLD_PERSONA_HEAD, cfg.DEBUG_LLM_OLD_PERSONA_TAIL
         )
         return (
-            "[画像 · 精炼] \n"
-            f"[重点: 行为预测误差 (predicted vs actual)，总长 {len(disc)} 字符 — 尽量完整展示]\n"
+            "[Persona · Refinement] \n"
+            f"[Focus: behavior prediction discrepancy (predicted vs actual), total {len(disc)} characters — show as complete as possible]\n"
             f"{disc_show}\n\n"
-            f"[原画像（节选: 头+尾）总长 {len(op)} 字符]\n{op_snip}"
+            f"[Original persona (excerpt: head+tail) total {len(op)} characters]\n{op_snip}"
         )
     return ""
 
@@ -266,7 +336,7 @@ def _format_debug_model_output(
     model_output: str,
     debug_focus: Optional[Dict[str, Any]],
 ) -> str:
-    """画像长输出用头尾；动作用配置决定是否全长。"""
+    """Persona long output uses head/tail; action uses config to decide whether to show full length."""
     if debug_focus and debug_focus.get("type") in ("profile_initial", "profile_refine"):
         return _head_tail_for_debug(
             model_output,
@@ -292,7 +362,7 @@ def emit_llm_debug(
     debug_focus: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
-    DEBUG 模式下打印 LLM 调用。画像类通过 debug_focus 重点打印误差/行为节选，长画像输出用头+尾。
+    In DEBUG mode, print LLM calls. Persona type highlights discrepancy/behavior excerpt via debug_focus, long persona output uses head+tail.
     """
     if not cfg.DEBUG_LLM:
         return
@@ -309,16 +379,16 @@ def emit_llm_debug(
 
     print(
         "\n" + "=" * 72
-        + f"\n[LLM-DEBUG] 步骤: {step}"
-        + f"\n[LLM-DEBUG] 模型类型(model_role): {model_role}"
-        + f"\n[LLM-DEBUG] 模型标识(model_id): {model_id}"
-        + f"\n[LLM-DEBUG] 后端(backend): {backend}"
+        + f"\n[LLM-DEBUG] Step: {step}"
+        + f"\n[LLM-DEBUG] Model type (model_role): {model_role}"
+        + f"\n[LLM-DEBUG] Model ID (model_id): {model_id}"
+        + f"\n[LLM-DEBUG] Backend: {backend}"
         + "\n" + "-" * 72
         + f"\n[system / instruction]\n{mi}"
         + "\n" + "-" * 72
-        + f"\n[user / input — 调试摘要]\n{mu}"
+        + f"\n[user / input — debug summary]\n{mu}"
         + "\n" + "-" * 72
-        + f"\n[assistant / 模型输出 — 长文本已按规则节选]\n{out}"
+        + f"\n[assistant / model output — long text excerpted per rules]\n{out}"
         + "\n" + "=" * 72 + "\n",
         flush=True,
     )
@@ -337,8 +407,8 @@ def call_llm(
     debug_emit: bool = True,
 ) -> str:
     """
-    调用本地 LLM（transformers 格式），返回生成文本。
-    使用 Llama-3 chat template: <|begin_of_text|><|start_header_id|>system<|end_header_id|>...<|eot_id|>
+    Call local LLM (transformers format), return generated text.
+    Use Llama-3 chat template: <|begin_of_text|><|start_header_id|>system<|end_header_id|>...<|eot_id|>
     """
     messages = [
         {"role": "system", "content": instruction},
@@ -391,11 +461,11 @@ def call_llm_api(
     max_context_tokens: Optional[int] = None,
 ) -> str:
     """
-    通过 OpenAI 兼容 API 调用模型，返回生成文本。
-    适用于 vLLM / 任意 OpenAI 兼容服务。
+    Call model via OpenAI compatible API, return generated text.
+    Applicable to vLLM / any OpenAI compatible service.
 
-    max_context_tokens: 远端窗口上限；None 时使用 config.ACTION_API_MAX_CONTEXT_TOKENS。
-    会在请求前用字符粗估 prompt 长度并收缩 max_tokens，避免 「max_tokens 大于 context−input」 的 400。
+    max_context_tokens: Remote window limit; when None use config.ACTION_API_MAX_CONTEXT_TOKENS.
+    Estimates prompt length by character count before request and shrinks max_tokens to avoid "max_tokens > context−input" 400 error.
     """
 
     def _estimate_prompt_tokens(instr: str, user: str) -> int:
@@ -408,8 +478,8 @@ def call_llm_api(
 
     def _parse_allowed_max_tokens_from_error(msg: str) -> Optional[int]:
         """
-        从常见上下文超限报错中解析“当前请求最多还能给多少 completion tokens”。
-        典型格式：
+        Parse "how many completion tokens can current request still have" from common context limit errors.
+        Typical format:
         "... maximum context length is 4096 tokens and your request has 2148 input tokens ..."
         """
         if not msg:
@@ -426,7 +496,7 @@ def call_llm_api(
             input_tokens = int(m.group(2))
         except (TypeError, ValueError):
             return None
-        # 预留少量安全缓冲，避免边界抖动再次触发 400
+        # Reserve small safety buffer to avoid boundary jitter triggering 400 again
         return max(1, max_ctx - input_tokens - 16)
 
     mc = (
@@ -443,7 +513,7 @@ def call_llm_api(
     max_tokens_req = max(1, min(wanted, allowed_completion))
     if max_tokens_req < wanted and getattr(cfg, "DEBUG_LLM", False):
         print(
-            f"[LLM-API] max_tokens 预判收缩: {wanted} -> {max_tokens_req} "
+            f"[LLM-API] max_tokens pre-judged shrink: {wanted} -> {max_tokens_req} "
             f"(est_input≈{est_in}, context={mc}, model={model_name})",
             flush=True,
         )
@@ -466,10 +536,10 @@ def call_llm_api(
             if getattr(e, "body", None) and isinstance(e.body, dict):
                 err_msg = err_msg + " " + str(e.body)
             allowed = _parse_allowed_max_tokens_from_error(err_msg)
-            # 仅对“max_tokens 过大”类问题做一次动态缩小重试
+            # Only retry once for "max_tokens too large" type issues with dynamic shrinking
             if attempt == 0 and allowed is not None and allowed < max_tokens_req:
                 print(
-                    f"[LLM-API] max_tokens 动态收缩: {max_tokens_req} -> {allowed} "
+                    f"[LLM-API] max_tokens dynamic shrink: {max_tokens_req} -> {allowed} "
                     f"(model={model_name})",
                     flush=True,
                 )
@@ -477,10 +547,10 @@ def call_llm_api(
                 continue
             raise
     else:
-        # 理论上不会走到这里；保险兜底
+        # Theoretically should not reach here; safety fallback
         if last_err is not None:
             raise last_err
-        raise RuntimeError("LLM API 调用失败：未知错误")
+        raise RuntimeError("LLM API call failed: unknown error")
 
     out = response.choices[0].message.content.strip()
     if debug_emit:
@@ -507,7 +577,7 @@ def invoke_action_llm(
     *,
     debug_step: str = "action",
 ) -> str:
-    """统一调度：根据 TEST_MODE / vLLM / 本地 自动选择调用方式。"""
+    """Unified dispatch: automatically select invocation method based on TEST_MODE / vLLM / local."""
     action_debug = bool(
         cfg.DEBUG_LLM and getattr(cfg, "DEBUG_LLM_INCLUDE_ACTIONS", False)
     )
@@ -521,7 +591,7 @@ def invoke_action_llm(
             temperature,
             api_key=TEST_API_KEY,
             debug_step=debug_step,
-            model_role="test_remote_api(action+profile共用)",
+            model_role="test_remote_api(action+profile shared)",
             debug_emit=action_debug,
         )
     if USE_VLLM_API or model is None or tokenizer is None:
@@ -549,7 +619,7 @@ def invoke_action_llm(
 
 
 def parse_action_type(raw_output: str) -> str:
-    """从模型输出中提取动作类型。"""
+    """Extract action type from model output."""
     raw = raw_output.strip().lower()
     for action in ["post", "reply", "repost", "like", "not interested"]:
         if action in raw:
@@ -558,7 +628,7 @@ def parse_action_type(raw_output: str) -> str:
 
 
 # ============================================================================
-# 窗口级动作预测
+# Window-level action prediction
 # ============================================================================
 
 def predict_actions_for_window(
@@ -576,23 +646,23 @@ def predict_actions_for_window(
     include_observed_history: Optional[bool] = None,
 ) -> List[Dict]:
     """
-    对目标窗口中每条动作进行预测。
+    Predict each action in target window.
 
     Args:
-        use_parallel: 是否使用并行预测（默认从 config.ACTION_PREDICTION_PARALLEL 读取）
-        workers: 并行线程数（默认从 config.ACTION_PREDICTION_WORKERS 读取）
+        use_parallel: Whether to use parallel prediction (default read from config.ACTION_PREDICTION_PARALLEL)
+        workers: Number of parallel threads (default read from config.ACTION_PREDICTION_WORKERS)
 
-    注意：
-    - 并行模式：所有动作使用相同的 history_actions，可以并行预测
-    - 串行模式（旧版）：使用滑动历史，动作之间有依赖
+    Note:
+    - Parallel mode: all actions use same history_actions, can predict in parallel
+    - Serial mode (legacy): use sliding history, actions have dependencies
 
-    profile_suffix: 可选，拼在画像文本后（如显式近期/全量行为块），供对比实验 S0+历史、全量历史等。
-    include_observed_history: False 时不拼 profile_suffix，且 Recent user actions 块为空占位；
-        None 时读 config.ACTION_PROMPT_INCLUDE_OBSERVED_HISTORY。
+    profile_suffix: Optional, append after persona text (e.g. explicit recent/full behavior block) for comparison experiments S0+history, full history, etc.
+    include_observed_history: When False, don't append profile_suffix, and Recent user actions block is empty placeholder;
+        When None, read config.ACTION_PROMPT_INCLUDE_OBSERVED_HISTORY.
 
-    返回预测列表：[{"action_type": str, "content": str|None}, ...]
+    Return prediction list: [{"action_type": str, "content": str|None}, ...]
     """
-    # 从配置读取默认值
+    # Read default values from config
     if use_parallel is None:
         use_parallel = getattr(cfg, "ACTION_PREDICTION_PARALLEL", True)
     if workers is None:
@@ -606,7 +676,7 @@ def predict_actions_for_window(
     eff_suffix = profile_suffix if _ih else None
     eff_history_src = history_actions if _ih else []
 
-    # 并行模式：所有动作使用相同的历史窗口
+    # Parallel mode: all actions use same history window
     if use_parallel:
         from src.action_predictor_parallel import predict_actions_for_window_parallel
         return predict_actions_for_window_parallel(
@@ -622,7 +692,7 @@ def predict_actions_for_window(
             workers,
         )
 
-    # 串行模式（旧版）：使用滑动历史
+    # Serial mode (legacy): use sliding history
     user_profile = (profile + (f"\n\n{eff_suffix}" if (eff_suffix or "").strip() else "")).strip()
     predictions = []
     current_history = list(eff_history_src)
@@ -630,8 +700,10 @@ def predict_actions_for_window(
     hw = max(1, int(getattr(cfg, "ACTION_PREDICTION_HISTORY_WINDOW", 5)))
     n = len(target_actions)
     for i, target in enumerate(target_actions):
+        actual_type = target.get("action_type", "")  # Get actual type
         recent = current_history[-hw:] if current_history and _ih else []
-        # 决策预测
+
+        # Decision prediction
         inst, inp = build_decision_prompt(user_profile, recent, target)
         raw_decision = invoke_action_llm(
             model,
@@ -644,9 +716,9 @@ def predict_actions_for_window(
         )
         pred_type = parse_action_type(raw_decision)
 
-        # 内容预测（仅 post/reply）
+        # Content prediction (judge by actual type, not predicted type)
         pred_content = None
-        if pred_type in ("post", "reply"):
+        if actual_type in ("post", "reply"):  # Key change: use actual_type
             inst_c, inp_c = build_content_prompt(user_profile, recent, target)
             pred_content = invoke_action_llm(
                 model,
@@ -663,14 +735,14 @@ def predict_actions_for_window(
             "content": pred_content,
         })
 
-        # 将真实动作加入历史（模拟时间推进）
+        # Add actual action to history (simulate time progression)
         current_history.append(target)
 
     return predictions
 
 
 # ============================================================================
-# 偏差信号生成（用于画像精炼）
+# Discrepancy signal generation (for persona refinement)
 # ============================================================================
 
 def build_behavior_discrepancies(
@@ -679,15 +751,17 @@ def build_behavior_discrepancies(
     history_actions: List[Dict],
 ) -> str:
     """
-    对比预测与真实，构造偏差信号文本，供画像精炼 prompt 使用。
+    Compare predictions vs actual, construct discrepancy signal text for persona refinement prompt use.
+
+    Also compute and save semantic similarity to predictions (avoid redundant computation later).
     """
     parts = []
     seen_signatures = set()
 
     def _normalized_scenario_for_dedup(s: str) -> str:
         """
-        去重时忽略首行的误差标签（如 [TEXT_GENERATION]/[DECISION_ONLY]），
-        只比较后续核心内容，避免“内容完全相同但标签不同”重复输出。
+        When deduplicating, ignore error label in first line (e.g. [TEXT_GENERATION]/[DECISION_ONLY]),
+        only compare subsequent core content to avoid "identical content but different label" duplicate output.
         """
         lines = [ln.strip() for ln in (s or "").splitlines() if ln.strip()]
         if lines and lines[0].startswith("[") and lines[0].endswith("]"):
@@ -716,56 +790,105 @@ def build_behavior_discrepancies(
             predicted_action=predicted_action,
             actual_action=actual_action,
         ))
+
     for i, (pred, actual) in enumerate(zip(predictions, actuals)):
         actual_type = actual.get("action_type", "unknown")
         actual_text = actual.get("action_text") or actual.get("target") or ""
         pred_type = pred.get("action_type", "unknown")
-        pred_text = pred.get("content") or ""
+        pred_content = pred.get("content") or ""
 
-        # 一条动作可拆分为两类误差：
-        # 1) TEXT_GENERATION：post/reply 的文本生成误差
-        # 2) DECISION_ONLY：动作类型判定误差
-        # 这样总条数不再固定受窗口长度限制（可 > len(window)）
         type_diff = pred_type != actual_type
 
-        predicted = f"{pred_type}" + (f': "{pred_text[:200]}"' if pred_text else "")
-        # reply：action_text 为用户回复；target 为被回复对象，须单独展示
-        if actual_type == "reply":
-            u_reply = (actual.get("action_text") or "")[:200]
-            actual_str = f'{actual_type}: "{u_reply}"' if u_reply else f"{actual_type}"
-        else:
-            actual_str = f"{actual_type}" + (f': "{actual_text[:200]}"' if actual_text else "")
-
-        object_block = ""
-        if actual_type == "reply":
-            replied_to = (actual.get("target") or "")[:500]
-            if replied_to:
-                object_block = f'Replied-to original post/comment: "{replied_to}"\n'
-
-        # 文本生成类：post/reply 都记录（反映内容层信号）
+        # ============================================
+        # Discrepancy 1: TEXT_GENERATION (content generation discrepancy)
+        # Only focus on content quality, not include type information
+        # ============================================
         if actual_type in ("post", "reply"):
-            scenario_ctx = (
-                "[TEXT_GENERATION] \n"
-                f"Decision type predicted: {pred_type}; actual type: {actual_type}"
-            )
+            # Use simplified scenario construction (remove redundant information)
+            content_scenario = build_content_scenario_for_discrepancy(actual)
+
+            # Only show content, no type prefix
+            predicted_content = pred_content[:200] if pred_content else "(empty)"
+
+            # Construct actual content
+            if actual_type == "reply":
+                actual_content = (actual.get("action_text") or "")[:200]
+                # reply scenario description already includes replied object, no need for object_block
+                object_block = ""
+            else:  # post
+                actual_content = actual_text[:200]
+                object_block = ""
+
+            actual_content = actual_content if actual_content else "(empty)"
+
+            # Compute semantic similarity (use full text, no truncation)
+            # If already computed, use directly
+            if "semantic_similarity" not in pred:
+                full_pred_content = pred_content if pred_content else ""
+                # For post type, prefer action_text, then target
+                # For reply type, action_text is reply content, target is replied object
+                if actual_type == "reply":
+                    full_actual_content = actual.get("action_text") or ""
+                else:  # post
+                    full_actual_content = actual.get("action_text") or actual.get("target") or ""
+
+                # Only compute similarity when both texts are non-empty
+                if full_pred_content and full_actual_content:
+                    similarity = compute_semantic_similarity(full_pred_content, full_actual_content)
+                else:
+                    similarity = float('nan')  # Mark as uncomputable
+
+                # Save to predictions to avoid redundant computation later
+                pred["semantic_similarity"] = similarity
+            else:
+                similarity = pred["semantic_similarity"]
+
+            # Add similarity info to scenario description
+            # Use math.isnan() to check if valid value
+            import math
+            if not math.isnan(similarity):
+                content_scenario_with_sim = f"{content_scenario} [Similarity: {similarity:.3f}]"
+            else:
+                content_scenario_with_sim = content_scenario
+
+            # Record discrepancy
             _append_unique(
-                scenario_context=scenario_ctx,
+                scenario_context=f"[TEXT_GENERATION] {content_scenario_with_sim}",
                 object_block=object_block,
-                predicted_action=predicted,
-                actual_action=actual_str,
+                predicted_action=f'"{predicted_content}"',  # Content only
+                actual_action=f'"{actual_content}"',        # Content only
             )
 
-        # 交互决策类：只在类型误判时记录（包括 post/reply）
+        # ============================================
+        # Discrepancy 2: DECISION_ONLY (decision discrepancy)
+        # Only focus on type judgment, not include content information
+        # ============================================
         if type_diff:
-            scenario_ctx = (
-                "[DECISION_ONLY] \n"
-                f"Decision type predicted: {pred_type}; actual type: {actual_type}"
-            )
+            # Use simplified scenario construction (remove redundant context repetition)
+            decision_scenario = build_decision_scenario_for_discrepancy(actual)
+
+            # Only show type, no content
+            predicted_type = pred_type
+            actual_type_str = actual_type
+
+            # Simplified context information (only provide when necessary)
+            object_block = ""
+            if actual_type == "reply":
+                replied_to = (actual.get("target") or "")[:200]
+                if replied_to:
+                    object_block = f'Reply context: "{replied_to}"\n'
+            elif actual_type in ("post", "like", "repost"):
+                # Other types provide brief context
+                context = (actual.get("target") or actual.get("action_text") or "")[:150]
+                if context:
+                    object_block = f'Content: "{context}"\n'
+
+            # Record discrepancy
             _append_unique(
-                scenario_context=scenario_ctx,
+                scenario_context=f"[DECISION_ONLY] {decision_scenario}",
                 object_block=object_block,
-                predicted_action=predicted,
-                actual_action=actual_str,
+                predicted_action=predicted_type,  # Type only
+                actual_action=actual_type_str,    # Type only
             )
 
     if not parts:
