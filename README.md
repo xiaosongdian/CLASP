@@ -54,6 +54,21 @@ Clasp_git/
 └── 
 ```
 
+## Dataset: BlueTrack
+
+**BlueTrack** is a dataset for social behavior analysis and user personality modeling.
+
+### Download
+You can download the BlueTrack dataset from the following link:
+- 🔗 [BlueTrack Download](https://anonymous-hf.up.railway.app/a/dwsruwl12j4z/)
+
+BlueTrack is a large-scale Bluesky dataset that covers:
+- **Long-horizon behaviors**: Multi-window temporal sequences
+- **Heterogeneous actions**: Post, reply, repost, like with complete elements
+- **Complete action elements**: Timestamps, content, targets, and context
+
+This dataset facilitates realistic social media simulation and evaluation.
+
 ## Installation
 
 ### Requirements
@@ -224,20 +239,6 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 3. **Multi-Process Evaluation**: Set `DPO_USER_PROCESSES > 1` for parallel user processing
 4. **GPU Acceleration**: Use CUDA for Sentence-Transformer scoring (set `DPO_SCORER_DEVICE = "cuda"`)
 
-## Dataset: BlueTrack
-
-**BlueTrack** is a dataset for social behavior analysis and user personality modeling.
-
-### Download
-You can download the BlueTrack dataset from the following link:
-- 🔗 [BlueTrack Download](https://anonymous-hf.up.railway.app/a/dwsruwl12j4z/)
-
-BlueTrack is a large-scale Bluesky dataset that covers:
-- **Long-horizon behaviors**: Multi-window temporal sequences
-- **Heterogeneous actions**: Post, reply, repost, like with complete elements
-- **Complete action elements**: Timestamps, content, targets, and context
-
-This dataset facilitates realistic social media simulation and evaluation.
 
 ## Ciation Format
 
