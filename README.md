@@ -1,9 +1,23 @@
-# CLASP: A Closed-Loop Behavior Alignment Framework for Social Media Agent Simulation
-
 <p align="center">
   <img src="scripts/logo.png" alt="CLASP Logo" width="400">
 </p>
 
+
+<p align="center">
+  <strong> A Closed-Loop Behavior Alignment Framework for Social Media Agent Simulation</strong>
+</p>
+ 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8+-blue" />
+  <img src="https://img.shields.io/badge/vLLM-Inference-green" />
+  <img src="https://img.shields.io/badge/Transformers-4.30+-orange" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow" />
+</p>
+
+---
+
+
+## What is CLASP? 
 
 A closed-loop behavior alignment framework that leverages explicit, dynamically refined personas to bridge users' historical behaviors and subsequent agent actions, ensuring behavioral consistency and temporal adaptability in social media simulation.
 
