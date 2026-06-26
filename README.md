@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Python-3.8+-blue" />
   <img src="https://img.shields.io/badge/vLLM-Inference-green" />
   <img src="https://img.shields.io/badge/Transformers-4.30+-orange" />
-  <img src="https://img.shields.io/badge/License-MIT-yellow" />
+  <img src="https://img.shields.io/badge/License-Apache-yellow" />
 </p>
 
 ---
